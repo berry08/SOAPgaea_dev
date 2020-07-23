@@ -66,6 +66,9 @@ public class JointCallingPrepare extends ToolsRunner {
 	public final static String INPUT_LIST = "input.gvcf.list";// added by gc
 	public final static String Window_File = "window.file.path";// window file path
 	public final static String Real_Mappers = "mapper.number";
+	public final static String AccumulateIndex="refChrAccLen";
+	public static Long refLength=0L;
+
 	private String HEADER_DEFAULT_PATH = "vcfheader";
 
 	private String MERGER_HEADER_INFO = "vcfheaderinfo";
@@ -134,9 +137,18 @@ public class JointCallingPrepare extends ToolsRunner {
 //            multiVcfHeader.headersConfig(new Path(options.getVcfHeaderFile()), options.getVCFHeaderOutput()+"/vcfHeaders", conf);
 		} else {
 //            conf.set(GaeaVCFOutputFormat.OUT_PATH_PROP, options.getVCFHeaderOutput() + "/vcfFileHeader.vcf");
-			conf.set(GaeaVCFOutputFormat.OUT_PATH_PROP, options.getVCFHeaderOutput() + "/" + HEADER_DEFAULT_PATH);
-			conf.set(MERGER_HEADER_INFO, options.getVCFHeaderOutput() + "/" + MERGER_HEADER_INFO);
-//			multiVcfHeader.headersConfig(options.getInput(), options.getVCFHeaderOutput(), conf);
+//			conf.set(GaeaVCFOutputFormat.OUT_PATH_PROP, options.getVCFHeaderOutput() + "/" + HEADER_DEFAULT_PATH);
+//			conf.set(MERGER_HEADER_INFO, options.getVCFHeaderOutput() + "/" + MERGER_HEADER_INFO);
+			FileSystem fs=FileSystem.get(conf);
+			Path vcfheaderPath=new Path(options.getVCFHeaderOutput()+"/"+HEADER_DEFAULT_PATH);
+			Path vcfheaderinfoPath=new Path(options.getVCFHeaderOutput()+"/"+MERGER_HEADER_INFO);
+			if(fs.exists(vcfheaderPath) && fs.exists(vcfheaderinfoPath)){
+				logger.warn("vcfheader exists");
+				conf.set(GaeaVCFOutputFormat.OUT_PATH_PROP, options.getVCFHeaderOutput() + "/" + HEADER_DEFAULT_PATH);
+				conf.set(MERGER_HEADER_INFO, options.getVCFHeaderOutput() + "/" + MERGER_HEADER_INFO);
+			}else{
+				multiVcfHeader.headersConfig(options.getInput(), options.getVCFHeaderOutput(), conf);
+			}
 			// multiVcfHeader.headersConfig(options.getInput(),
 			// options.getVCFHeaderOutput(), conf);
 //            VCFHeader vcfHeader = getVCFHeaderFromInput(multiVcfHeader.getHeaders());
@@ -235,11 +247,11 @@ public class JointCallingPrepare extends ToolsRunner {
 		}
 		int window_size = options.getWindowsSize();
 		int total_bytes = 0;
-		Long refLength=0L;
 		for (Map.Entry<Integer, String> entry : contigs.entrySet()) {
 			// System.out.println(entry.getKey()+"\t"+entry.getValue());
 			String chr = entry.getValue();
 			int contigLength = header.getSequenceDictionary().getSequence(chr).getSequenceLength();
+
 			refLength+=contigLength;
 			int start = 1;
 			int end = -1;

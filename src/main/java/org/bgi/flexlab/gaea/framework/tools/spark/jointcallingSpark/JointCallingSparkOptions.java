@@ -1,9 +1,6 @@
-package org.bgi.flexlab.gaea.tools.mapreduce.jointcalling;
+package org.bgi.flexlab.gaea.framework.tools.spark.jointcallingSpark;
 
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-
+import htsjdk.variant.vcf.VCFCodec;
 import org.apache.commons.cli.ParseException;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.*;
@@ -15,41 +12,44 @@ import org.bgi.flexlab.gaea.data.options.GaeaOptions;
 import org.bgi.flexlab.gaea.data.structure.vcf.AbstractVCFLoader;
 import org.bgi.flexlab.gaea.tools.jointcalling.UnifiedGenotypingEngine.GenotypingOutputMode;
 import org.bgi.flexlab.gaea.tools.jointcalling.UnifiedGenotypingEngine.OutputMode;
-import org.bgi.flexlab.gaea.tools.mapreduce.realigner.RealignerExtendOptions;
+import org.bgi.flexlab.gaea.tools.mapreduce.jointcalling.JointCallingOptions;
 import org.seqdoop.hadoop_bam.VCFFormat;
 
-import htsjdk.variant.vcf.VCFCodec;
+import java.io.IOException;
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.List;
 
-public class JointCallingOptions extends GaeaOptions implements HadoopOptions{
-	private final static String SOFTWARE_NAME = "JointCallingPrepare";
+public class JointCallingSparkOptions extends JointCallingOptions implements HadoopOptions, Serializable {
+	private final static String SOFTWARE_NAME = "JointCallingSpark";
 	private final static String SOFTWARE_VERSION = "1.0";
-	
+
 	private String inputList=null;
-	
+
 	private int samplePloidy = 2;//C
 	private int MAX_ALTERNATE_ALLELES = 6;//M
 	private int MAX_NUM_PL_VALUES = 100;//m
 	private int windows_size = 5000;//w
+	private String targetRegion=null;//l，目标处理区域
 	private int num_reducer = 100;//n
 	private int num_mapper = 100;//N
-	private boolean large_mode=false;//D
 
 	private String tmpOut=null;//t
 	private String output = null;//o
 	private String reference = null;//r
-	private String dbsnp = null;//k	
+	private String dbsnp = null;//k
 	private String MAGIC_HEADER_LINE = VCFCodec.VCF4_MAGIC_HEADER;//F
-	
+
 	//private String winFile=null;//W
-	
-	private double snpHeterozygosity = 1e-3;//b	
+
+	private double snpHeterozygosity = 1e-3;//b
 	private double indelHeterozygosity = 1.0/8000;//B
-	
-	private List<Path> input = new ArrayList<Path>();//i
+
+	private List<String> input = new ArrayList<String>();//i
 	private List<Double> inputPrior = new ArrayList<Double>();//p
 	private OutputMode outputMode = OutputMode.EMIT_VARIANTS_ONLY;//O
 	private GenotypingOutputMode genotypeMode = GenotypingOutputMode.DISCOVERY;//G
-	
+
 	private boolean unquifySamples = false;//u
 	private boolean bcfFormat = false;//f
 
@@ -61,9 +61,9 @@ public class JointCallingOptions extends GaeaOptions implements HadoopOptions{
 	public double STANDARD_CONFIDENCE_FOR_EMITTING = 30.0;//s
 	public double heterozygosityStandardDeviation = 0.01;//j
 	public String vcfHeaderFile = null;
-	
-	
-	public JointCallingOptions(){
+
+
+	public JointCallingSparkOptions(){
 		addOption("a","allSitePLs",false,"Annotate all sites with PLs");
 		addOption("A","annotateNDA",false,"If provided, we will annotate records with the number of alternate alleles that were discovered (but not necessarily genotyped) at a given site");
 		addOption("b","hets",true,"Heterozygosity value used to compute prior likelihoods for any locus");
@@ -77,10 +77,7 @@ public class JointCallingOptions extends GaeaOptions implements HadoopOptions{
 		addOption("I","include_non_variant",false,"Include loci found to be non-variant after genotyping");
 		addOption("j","heterozygosity_stdev",true,"Standard deviation of eterozygosity for SNP and indel calling");
 		addOption("k", "knowSite", true, "known snp/indel file,the format is VCF4");
-		addOption("l","largeSampleSize",false,"mode for large sample size(e.g. more than 1000 samples)");
-		addOption("L","largeSampleSize2",false,"mode2 for large sample size(e.g. more than 1000 samples)");
-		addOption("d","largeSampleSize3",false,"mode3 for large sample size(e.g. more than 1000 samples)");
-		addOption("D","largeSampleSize4",false,"mode4 for large sample size(e.g. more than 1000 samples)");
+		addOption("l","targetRegion",true,"target region to process");
 		addOption("N", "mapper", true, "mapper number[100]");
 		addOption("n", "reducer", true, "reducer numbers[100]");
 		addOption("m","max_num_PL_values",true,"Maximum number of PL values to output");
@@ -141,7 +138,6 @@ public class JointCallingOptions extends GaeaOptions implements HadoopOptions{
 		this.windows_size = getOptionIntValue("w",5000);
 		this.num_reducer = getOptionIntValue("n",100);
 		this.num_mapper=getOptionIntValue("N", 100);
-		
 		this.tmpOut=getOptionValue("t",null);
 		this.output = getOptionValue("o",null);
 		this.reference = getOptionValue("r",null);
@@ -149,9 +145,9 @@ public class JointCallingOptions extends GaeaOptions implements HadoopOptions{
 		parseInputPrior(getOptionValue("p",null));
 		parseOutputMode(getOptionValue("O",OutputMode.EMIT_VARIANTS_ONLY.toString()));
 		parseGenotypeMode(getOptionValue("G",GenotypingOutputMode.DISCOVERY.toString()));
-
+		
 		//this.winFile=getOptionValue("W",null);//added by gc. Windows file of ref
-		this.large_mode=getOptionBooleanValue("D",false);
+		this.targetRegion=getOptionValue("l",null);
 		this.ANNOTATE_ALL_SITES_WITH_PL = getOptionBooleanValue("a",false);
 		this.ANNOTATE_NUMBER_OF_ALLELES_DISCOVERED = getOptionBooleanValue("A",false);
 		this.INCLUDE_NON_VARIANT = getOptionBooleanValue("I",false);
@@ -208,7 +204,7 @@ public class JointCallingOptions extends GaeaOptions implements HadoopOptions{
 			for (FileStatus f: fileStatuses) {
 				if(f.getLen() <= 0)
 					continue;
-				input.add(f.getPath());
+				input.add(f.getPath().getName());
 			}
 			Path vcfHeaderPath = new Path(path.getParent().toString() + "/vcfFileHeader.vcf");
 			if(inFS.exists(vcfHeaderPath))
@@ -219,7 +215,7 @@ public class JointCallingOptions extends GaeaOptions implements HadoopOptions{
 		boolean isvcf = AbstractVCFLoader.isVCFStream(inFS.open(path), MAGIC_HEADER_LINE);
 
 		if(isvcf){
-			input.add(path);
+			input.add(path.getName());
 		}
 		else{
 			FSDataInputStream currInput;
@@ -230,7 +226,7 @@ public class JointCallingOptions extends GaeaOptions implements HadoopOptions{
 				Text line = new Text();
 				
 				while(lineReader.readLine(line) > 0){
-					input.add(new Path(line.toString()));
+					input.add(line.toString());
 				}
 			} catch (IOException e) {
 				throw new RuntimeException(e.toString());
@@ -292,7 +288,7 @@ public class JointCallingOptions extends GaeaOptions implements HadoopOptions{
 	public String getOutDir(){
 		return this.output;
 	}
-	public List<Path> getInput(){
+	public List<String> getInputStringList(){
 		return this.input;
 	}
 	
@@ -308,14 +304,8 @@ public class JointCallingOptions extends GaeaOptions implements HadoopOptions{
 		return this.unquifySamples;
 	}
 	
-	public int getReducerNumber(){
-		return this.num_reducer;
-	}
-	public int getMapperNumber() {
-		return this.num_mapper;
-	}
-	public boolean getMapperMode() {
-		return this.large_mode;
+	public String getTargetRegion() {
+		return this.targetRegion;
 	}
 	public String getVcfHeaderFile() {
 		return vcfHeaderFile;
@@ -340,10 +330,17 @@ public class JointCallingOptions extends GaeaOptions implements HadoopOptions{
 	        return VCFFormat.BCF;
 	    return VCFFormat.VCF;
 	}
-	public void setS(double v){
-		this.STANDARD_CONFIDENCE_FOR_CALLING=v;
+
+	public int getReducerNumber(){
+		return this.num_reducer;
 	}
-	public void sets(double v){
-		this.STANDARD_CONFIDENCE_FOR_EMITTING=v;
+	public int getMapperNumber() {
+		return this.num_mapper;
+	}
+	public double getS(){
+		return this.STANDARD_CONFIDENCE_FOR_CALLING;
+	}
+	public double gets(){
+		return this.STANDARD_CONFIDENCE_FOR_EMITTING;
 	}
 }

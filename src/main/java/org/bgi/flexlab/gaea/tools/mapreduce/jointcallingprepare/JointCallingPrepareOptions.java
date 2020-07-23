@@ -32,11 +32,7 @@ public class JointCallingPrepareOptions extends GaeaOptions implements HadoopOpt
 	private int windows_size = 5000;//w
 	private int num_reducer = 100;//n
 	private int num_mapper = 100;//N
-	private boolean large_mode=false;//l
-	private boolean large_mode2=false;//L
-	private boolean large_mode3=false;//d
-	private boolean large_mode4=false;//D
-	
+
 	private String tmpOut=null;//t
 	private String output = null;//o
 	private String reference = null;//r
@@ -154,10 +150,6 @@ public class JointCallingPrepareOptions extends GaeaOptions implements HadoopOpt
 		parseGenotypeMode(getOptionValue("G",GenotypingOutputMode.DISCOVERY.toString()));
 		
 		//this.winFile=getOptionValue("W",null);//added by gc. Windows file of ref
-		this.large_mode=getOptionBooleanValue("l",false);
-		this.large_mode2=getOptionBooleanValue("L",false);
-		this.large_mode3=getOptionBooleanValue("d",false);
-		this.large_mode4=getOptionBooleanValue("D",false);
 		this.ANNOTATE_ALL_SITES_WITH_PL = getOptionBooleanValue("a",false);
 		this.ANNOTATE_NUMBER_OF_ALLELES_DISCOVERED = getOptionBooleanValue("A",false);
 		this.INCLUDE_NON_VARIANT = getOptionBooleanValue("I",false);
@@ -317,18 +309,6 @@ public class JointCallingPrepareOptions extends GaeaOptions implements HadoopOpt
 	}
 	public int getMapperNumber() {
 		return this.num_mapper;
-	}
-	public boolean getMapperMode() {
-		return this.large_mode;
-	}
-	public boolean getMapperMode2() {
-		return this.large_mode2;
-	}
-	public boolean getMapperMode3() {
-		return this.large_mode3;
-	}
-	public boolean getMapperMode4() {
-		return this.large_mode4;
 	}
 	public String getVcfHeaderFile() {
 		return vcfHeaderFile;

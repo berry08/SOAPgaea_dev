@@ -1,6 +1,8 @@
 package org.bgi.flexlab.gaea.tools.jointcalling.afcalculator;
 
 import java.io.File;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.List;
 
 import org.bgi.flexlab.gaea.tools.jointcalling.util.SimpleTimer;
@@ -62,7 +64,7 @@ public abstract class AFCalculator implements Cloneable {
 	 */
 	public AFCalculationResult getLog10PNonRef(final VariantContext vc, final int defaultPloidy,
 			final int maximumAlternativeAlleles, final double[] log10AlleleFrequencyPriors) {
-
+		SimpleDateFormat formatter = new SimpleDateFormat("dd-MMM-yyyy HH:mm:ss:SSS");
 		if (vc == null)
 			throw new IllegalArgumentException("VariantContext cannot be null");
 		if (vc.getNAlleles() == 1)
@@ -80,16 +82,18 @@ public abstract class AFCalculator implements Cloneable {
 		// TODO decide what alleles to keep. This must be changed eventually.
 		// TODO issue {@see
 		// https://github.com/broadinstitute/gsa-unstable/issues/1376}
+//		System.out.println(formatter.format(new Date())+"\tbefore reduceScope");
 		final VariantContext vcWorking = reduceScope(vc, defaultPloidy, maximumAlternativeAlleles);
-
+//		System.out.println(formatter.format(new Date())+"\tafter reduceScope, before computeLog10PNonRef");
 		callTimer.start();
 		final AFCalculationResult result = computeLog10PNonRef(vcWorking, defaultPloidy, log10AlleleFrequencyPriors,
 				stateTracker);
+//		System.out.println(formatter.format(new Date())+"\tafter computeLog10PNonRef");
 		final long nanoTime = callTimer.getElapsedTimeNano();
 
 		if (exactCallLogger != null)
 			exactCallLogger.printCallInfo(vcWorking, log10AlleleFrequencyPriors, nanoTime, result);
-
+//		System.out.println(formatter.format(new Date())+"\tafter printCallInfo");
 		return result;
 	}
 

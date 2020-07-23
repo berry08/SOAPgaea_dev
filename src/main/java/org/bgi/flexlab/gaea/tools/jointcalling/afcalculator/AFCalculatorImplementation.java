@@ -156,7 +156,7 @@ public enum AFCalculatorImplementation {
 	 *             to the actual exception.
 	 * @return never {@code null}.
 	 */
-	public AFCalculator newInstance() {
+	public AFCalculator  newInstance() {
 		try {
 			return constructor.newInstance();
 		} catch (final Throwable e) {

@@ -1,12 +1,6 @@
 package org.bgi.flexlab.gaea.tools.mapreduce.jointcalling;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileReader;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
+import java.io.*;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Date;
@@ -102,16 +96,13 @@ public class JointCalling extends ToolsRunner{
 	public int run(String[] args) throws Exception {
 		BioJob job = BioJob.getInstance();
         Configuration conf = job.getConfiguration();
-        //conf.setBoolean(Job.MAP_OUTPUT_COMPRESS, true);
-        //conf.setClass(Job.MAP_OUTPUT_COMPRESS_CODEC, GzipCodec.class, CompressionCodec.class);
+        conf.setBoolean(Job.MAP_OUTPUT_COMPRESS, true);
+        conf.setClass(Job.MAP_OUTPUT_COMPRESS_CODEC, GzipCodec.class, CompressionCodec.class);
         String[] remainArgs = remainArgs(args, conf);
         JointCallingOptions options = new JointCallingOptions();
         options.parse(remainArgs);//获得header等信息
         options.setHadoopConf(remainArgs, conf);
         mapLargeMode=options.getMapperMode();
-        mapLargeMode2=options.getMapperMode2();
-        mapLargeMode3=options.getMapperMode3();
-        mapLargeMode4=options.getMapperMode4();
         conf.set(KeyIgnoringVCFOutputFormat.OUTPUT_VCF_FORMAT_PROPERTY, options.getOuptputFormat().toString());
         conf.setBoolean(GaeaVCFOutputFormat.HEADER_MODIFY, true);
         conf.set("mapreduce.reduce.shuffle.maxfetchfailures", "30");
@@ -122,19 +113,21 @@ public class JointCalling extends ToolsRunner{
 //            conf.set(GaeaVCFOutputFormat.OUT_PATH_PROP, options.getVcfHeaderFile());
 //            multiVcfHeader.headersConfig(new Path(options.getVcfHeaderFile()), options.getVCFHeaderOutput()+"/vcfHeaders", conf);
         }else {
-//            conf.set(GaeaVCFOutputFormat.OUT_PATH_PROP, options.getVCFHeaderOutput() + "/vcfFileHeader.vcf");
-        	conf.set(GaeaVCFOutputFormat.OUT_PATH_PROP, options.getVCFHeaderOutput() + "/"+HEADER_DEFAULT_PATH);
-			conf.set(MERGER_HEADER_INFO, options.getVCFHeaderOutput()+"/"+MERGER_HEADER_INFO);
-//            multiVcfHeader.headersConfig(options.getInput(), options.getVCFHeaderOutput(), conf);
-//            VCFHeader vcfHeader = getVCFHeaderFromInput(multiVcfHeader.getHeaders());
-//            VCFHdfsWriter vcfHdfsWriter = new VCFHdfsWriter(conf.get(GaeaVCFOutputFormat.OUT_PATH_PROP), false, false, conf);
-//            vcfHdfsWriter.writeHeader(vcfHeader);
-//            vcfHdfsWriter.close();
+			FileSystem fs=FileSystem.get(conf);
+			Path vcfheaderPath=new Path(options.getVCFHeaderOutput()+"/"+HEADER_DEFAULT_PATH);
+			Path vcfheaderinfoPath=new Path(options.getVCFHeaderOutput()+"/"+MERGER_HEADER_INFO);
+			if(fs.exists(vcfheaderPath) && fs.exists(vcfheaderinfoPath)){
+				System.out.println("vcfheader exists");
+				conf.set(GaeaVCFOutputFormat.OUT_PATH_PROP, options.getVCFHeaderOutput() + "/" + HEADER_DEFAULT_PATH);
+				conf.set(MERGER_HEADER_INFO, options.getVCFHeaderOutput() + "/" + MERGER_HEADER_INFO);
+			}else{
+				multiVcfHeader.headersConfig(options.getInput(), options.getVCFHeaderOutput(), conf);
+			}
+//        	conf.set(GaeaVCFOutputFormat.OUT_PATH_PROP, options.getVCFHeaderOutput() + "/"+HEADER_DEFAULT_PATH);
+//			conf.set(MERGER_HEADER_INFO, options.getVCFHeaderOutpusampleNamePatht()+"/"+MERGER_HEADER_INFO);
+            //multiVcfHeader.headersConfig(options.getInput(), options.getVCFHeaderOutput(), conf);
         }
-//        String headerString = options.getOutput()+"/../vcfheaderinfo";
-//		FileIterator iterator = new FileIterator(headerString);
-//		System.out.println(headerString);
-//		System.exit(-1);
+
         Path inputList=new Path(options.getInputList());
         ArrayList<String> inputListArr=new ArrayList<>();
         FileSystem inputListFs=inputList.getFileSystem(conf);
@@ -158,20 +151,17 @@ public class JointCalling extends ToolsRunner{
 			pathSample.put(eles[0], name);
         }
         indexReader.close();
+        HashMap<String,String> relative2Absolute=new HashMap<>();
         while((tmpLine=inputListReader.readLine())!=null) {
         	String[] eles=tmpLine.split("/");
         	String rName=eles[eles.length-1];
         	String sampleName=pathSample.get(rName);
-        	inputListArr.add(sampleName);
+
+			relative2Absolute.put(rName,tmpLine);
         }
         inputListReader.close();
         logger.warn("after get Header");
-        String[] inputListStringArr=new String[inputListArr.size()];
-        for(int i=0;i<inputListArr.size();i++) {
-        	inputListStringArr[i]=inputListArr.get(i);
-        }
-        conf.set(INPUT_ORDER, Utils.join(",", inputListStringArr));
-        inputListArr.clear();
+
         //conf.set("mapreduce.reduce.shuffle.memory.limit.percent", "0.1");
         conf.set("mapreduce.reduce.shuffle.input.buffer.percent","0.1");
         conf.set(INPUT_LIST,options.getInputList()); 
@@ -228,6 +218,51 @@ public class JointCalling extends ToolsRunner{
         	}
         }
         win_out.close();
+		Path vcfheaderinfoPath = new Path(conf.get(MERGER_HEADER_INFO));
+		BufferedReader headerInfoReader=new BufferedReader(new InputStreamReader(vcfheaderinfoPath.getFileSystem(conf).open(vcfheaderinfoPath)));
+		String headerInfoLine;
+		HashMap<String,String> sampleNamePath=new HashMap<>();
+		while((headerInfoLine=headerInfoReader.readLine())!=null){
+			String[] eles=headerInfoLine.split("\t");
+			if(eles[2].endsWith(",")){
+				eles[2]=eles[2].substring(0,eles[2].length()-1);
+			}
+			sampleNamePath.put(eles[2],eles[0]);
+//                vcfHeaderWriter.write(eles[0]+"\t"+inputIndex+"\t"+eles[2]+"\n");
+//                sampleIndex.put(eles[2],inputIndex);
+//                pathSample.put(eles[0], eles[2]);
+//                inputIndex++;
+		}
+		headerInfoReader.close();
+
+		vcfheaderinfoPath.getFileSystem(conf).delete(vcfheaderinfoPath);
+		File rawInput=new File(options.getInputList());
+		String sortedInputGvcfList=rawInput.getParent()+"/sorted."+rawInput.getName();
+		if(sortedInputGvcfList.startsWith("file:")){
+			sortedInputGvcfList=sortedInputGvcfList.substring(5);
+		}
+
+		BufferedWriter vcfInfoWriter=new BufferedWriter(new OutputStreamWriter(vcfheaderinfoPath.getFileSystem(conf).create(vcfheaderinfoPath)));
+		BufferedWriter sortedInputWriter=new BufferedWriter(new FileWriter(sortedInputGvcfList));
+		int inputIndex=0;
+		for(String sampleName:header.getSampleNamesInOrder()){
+			if(!sampleNamePath.containsKey(sampleName)){
+				logger.error("code error");
+				System.exit(1);
+			}
+			inputListArr.add(sampleName);
+			sortedInputWriter.write(relative2Absolute.get(sampleNamePath.get(sampleName))+"\n");
+			vcfInfoWriter.write(sampleNamePath.get(sampleName)+"\t"+inputIndex+"\t"+sampleName+"\n");
+			inputIndex++;
+		}
+		vcfInfoWriter.close();
+		sortedInputWriter.close();
+		sortedInputGvcfList="file://"+sortedInputGvcfList;
+		String[] inputListStringArr=new String[inputListArr.size()];
+		for(int i=0;i<inputListArr.size();i++) {
+			inputListStringArr[i]=inputListArr.get(i);
+		}
+		conf.set(INPUT_ORDER, Utils.join(",", inputListStringArr));
         int split_bytes=total_bytes/options.getMapperNumber();
         if(split_bytes<50) {
         	split_bytes=50;
@@ -258,75 +293,24 @@ public class JointCalling extends ToolsRunner{
         	int realMappers=(int)samples_size/mapperLine+1;
         	conf.set(Real_Mappers,String.valueOf(realMappers));
         }
-        if(mapLargeMode) {
-        	job.setWindowsBasicMapperClass(JointCallingMapperHuge.class, options.getWindowsSize(),0);
-        	FileInputFormat.setInputPaths(job,new Path(conf.get(INPUT_LIST)));
-        	job.setInputFormatClass(NLineInputFormat.class);
-        	System.out.println("samples number to be processed in each mapper:\t"+mapperLine);
-    		NLineInputFormat.setNumLinesPerSplit(job, mapperLine);
-
-        }else {
-        	if(mapLargeMode2) {
-        		String tmpDir=options.getVCFHeaderOutput()+"/TMP";
-        		if(tmpDir.startsWith("file://")) {
-        			tmpDir=tmpDir.substring(7);
-        		}
-        		File tmpDirfile=new File(tmpDir);
-        		if(!tmpDirfile.exists()) {
-        			tmpDirfile.mkdirs();
-        		}
-        		job.setWindowsBasicMapperClass(JointCallingMapperHuge2.class, options.getWindowsSize(),0);
-            	FileInputFormat.setInputPaths(job,new Path(conf.get(INPUT_LIST)));
-            	job.setInputFormatClass(NLineInputFormat.class);
-            	System.out.println("samples number to be processed in each mapper:\t"+mapperLine);
-        		NLineInputFormat.setNumLinesPerSplit(job, mapperLine);
-        	}else {
-        		if(mapLargeMode3) {
-        			String tmpDir=options.getVCFHeaderOutput()+"/TMP";
-            		if(tmpDir.startsWith("file://")) {
-            			tmpDir=tmpDir.substring(7);
-            		}
-            		File tmpDirfile=new File(tmpDir);
-            		if(!tmpDirfile.exists()) {
-            			tmpDirfile.mkdirs();
-            		}
-            		String tmpDir2=options.getVCFHeaderOutput()+"/TMPDONE";
-            		if(tmpDir2.startsWith("file://")) {
-            			tmpDir2=tmpDir2.substring(7);
-            		}
-            		File tmpDirfile2=new File(tmpDir2);
-            		if(!tmpDirfile2.exists()) {
-            			tmpDirfile2.mkdirs();
-            		}
-            		job.setWindowsBasicMapperClass(JointCallingMapperHuge3.class, options.getWindowsSize(),0);
-                	FileInputFormat.setInputPaths(job,new Path(conf.get(INPUT_LIST)));
-                	job.setInputFormatClass(NLineInputFormat.class);
-                	System.out.println("samples number to be processed in each mapper:\t"+mapperLine);
-            		NLineInputFormat.setNumLinesPerSplit(job, mapperLine);
-        		}else {
-        			if(mapLargeMode4) {
-                		//job.setWindowsBasicMapperClass(JointCallingMapperHuge.class, options.getWindowsSize(),0);
-        				job.setMapperClass(JointCallingMapperHuge.class);
-                    	FileInputFormat.setInputPaths(job,new Path(conf.get(INPUT_LIST)));
-                    	job.setInputFormatClass(NLineInputFormat.class);
-                		NLineInputFormat.setNumLinesPerSplit(job, mapperLine);
-        			}else {
-			        	FileInputFormat.setInputPaths(job, options.getInput().toArray(new Path[options.getInput().size()]));
-			        	job.setWindowsBasicMapperClass(JointCallingMapper.class, options.getWindowsSize(),0);
-			            job.setInputFormatClass(JointCallingVCFInputFormat.class);
-        			}
-        		}
-        	}
-        }
-        //job.setReducerClass(JointCallingReducer.class);
-        //job.setNumReduceTasks(options.getReducerNumber());
-        //job.setOutputKeyValue(WindowsBasedWritable.class,VariantContextWritable.class, NullWritable.class, VariantContextWritable.class);
-		//job.setOutputFormatClass(GaeaVCFOutputFormat.class);
+		if(mapLargeMode) {
+			job.setWindowsBasicMapperClass(JointCallingMapperHuge.class, options.getWindowsSize(),0);
+//        				job.setMapperClass(JointCallingMapperHuge.class);
+			FileInputFormat.setInputPaths(job,new Path(sortedInputGvcfList));
+			job.setInputFormatClass(NLineInputFormat.class);
+			NLineInputFormat.setNumLinesPerSplit(job, mapperLine);
+		}else {
+			FileInputFormat.setInputPaths(job, options.getInput().toArray(new Path[options.getInput().size()]));
+			job.setWindowsBasicMapperClass(JointCallingMapper.class, options.getWindowsSize(),0);
+			job.setInputFormatClass(JointCallingVCFInputFormat.class);
+		}
+        job.setReducerClass(JointCallingReducer.class);
+        job.setNumReduceTasks(options.getReducerNumber());
+        job.setOutputKeyValue(WindowsBasedWritable.class,VariantContextWritable.class, NullWritable.class, VariantContextWritable.class);
+		job.setOutputFormatClass(GaeaVCFOutputFormat.class);
 		FileOutputFormat.setOutputPath(job, new Path(options.getOutput()));
 		
-		job.setOutputKeyValue(NullWritable.class,VariantContextWritable.class);
 		//job.setOutputFormatClass(GaeaVCFOutputFormat.class);
-		job.setNumReduceTasks(0);
 		return job.waitForCompletion(true) ? 0 : 1;
 	}
 	public ArrayList<Integer> getMeanArr(int samples,int mappers){

@@ -1,17 +1,7 @@
 package org.bgi.flexlab.gaea.tools.jointcalling.util;
 
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.TreeMap;
+import java.util.*;
 
 import org.bgi.flexlab.gaea.data.exception.UserException;
 import org.bgi.flexlab.gaea.data.structure.location.GenomeLocation;
@@ -87,7 +77,6 @@ public class ReferenceConfidenceVariantContextMerger {
 			return null;
 		}
 		SimpleDateFormat formatter = new SimpleDateFormat("dd-MMM-yyyy HH:mm:ss:SSS");
-		System.out.println(formatter.format(new Date())+"\tstart merge");
 		// establish the baseline info (sometimes from the first VC)
 		final VariantContext first = VCs.get(0);
 		final String name = first.getSource();
@@ -117,7 +106,6 @@ public class ReferenceConfidenceVariantContextMerger {
 		// event
 		boolean sawSpanningDeletion = false;
 		boolean sawNonSpanningEvent = false;
-		System.out.println(formatter.format(new Date())+"\tbefore first cycle");
 		// cycle through and add info from the other VCs
 		for (final VariantContext vc : VCs) {
 
@@ -139,7 +127,6 @@ public class ReferenceConfidenceVariantContextMerger {
 			vcAndNewAllelePairs.add(new Pair<>(vc,
 					isSpanningEvent ? replaceWithNoCallsAndDels(vc) : remapAlleles(vc, refAllele, finalAlleleSet)));
 		}
-		System.out.println(formatter.format(new Date())+"\tafter first cycle");
 		// Add <DEL> and <NON_REF> to the end if at all required in the output.
 		if (sawSpanningDeletion && (sawNonSpanningEvent || !removeNonRefSymbolicAllele)) {
 			finalAlleleSet.add(Allele.SPAN_DEL);
@@ -151,7 +138,6 @@ public class ReferenceConfidenceVariantContextMerger {
 
 		boolean shouldComputePLs = allelesList
 				.size() <= GenotypeLikelihoods.MAX_DIPLOID_ALT_ALLELES_THAT_CAN_BE_GENOTYPED;
-		System.out.println(formatter.format(new Date())+"\tbefore second cycle");
 		for (final Pair<VariantContext, List<Allele>> pair : vcAndNewAllelePairs) {
 			final VariantContext vc = pair.getFirst();
 			final List<Allele> remappedAlleles = pair.getSecond();
@@ -183,7 +169,6 @@ public class ReferenceConfidenceVariantContextMerger {
 			// way
 			addReferenceConfidenceAttributes(pair, annotationMap);
 		}
-		System.out.println(formatter.format(new Date())+"\tafter second cycle");
 		// combine the annotations that are reducible and remove them from
 		// annotationMap
 		Map<String, Object> combinedAnnotations = new HashMap<>();
@@ -227,7 +212,329 @@ public class ReferenceConfidenceVariantContextMerger {
 															// re-genotype later
 		return builder.make();
 	}
+	public static VariantContext mapMerge(final List<VariantContext> VCs, final GenomeLocation loc, final Byte refBase,
+									   final boolean removeNonRefSymbolicAllele, final boolean samplesAreUniquified,
+									   final VariantAnnotatorEngine annotatorEngine) {
+		// this can happen if e.g. you are using a dbSNP file that spans a
+		// region with no gVCFs
+		if (VCs == null || VCs.isEmpty()) {
+			return null;
+		}
+		SimpleDateFormat formatter = new SimpleDateFormat("dd-MMM-yyyy HH:mm:ss:SSS");
+		// establish the baseline info (sometimes from the first VC)
+		final VariantContext first = VCs.get(0);
+		final String name = first.getSource();
 
+		// ref allele
+		final Allele refAllele = determineReferenceAlleleGivenReferenceBase(VCs, loc, refBase);
+		if (refAllele == null) {
+			return null;
+		}
+
+		// FinalAlleleSet contains the alleles of the new resulting VC
+		// Using linked set in order to guarantee a stable order
+		final LinkedHashSet<Allele> finalAlleleSet = new LinkedHashSet<>(10);
+		// Reference goes first
+		finalAlleleSet.add(refAllele);
+
+		final Map<String, Object> attributes = new LinkedHashMap<>();
+		final Set<String> rsIDs = new LinkedHashSet<>(1); // most of the time
+		// there's one id
+		int depth = 0;
+		final Map<String, List<ReducibleAnnotationData>> annotationMap = new LinkedHashMap<>();
+		final GenotypesContext genotypes = GenotypesContext.create();
+
+		// In this list we hold the mapping of each variant context alleles.
+		final List<Pair<VariantContext, List<Allele>>> vcAndNewAllelePairs = new ArrayList<>(VCs.size());
+		// Keep track of whether we saw a spanning deletion and a non-spanning
+		// event
+		boolean sawSpanningDeletion = false;
+		boolean sawNonSpanningEvent = false;
+		// cycle through and add info from the other VCs
+		for (final VariantContext vc : VCs) {
+
+			// if this context doesn't start at the current location then it
+			// must be a spanning event (deletion or ref block)
+			final boolean isSpanningEvent = loc.getStart() != vc.getStart();
+			// record whether it's also a spanning deletion/event (we know this
+			// because the VariantContext type is no
+			// longer "symbolic" but "mixed" because there are real alleles
+			// mixed in with the symbolic non-ref allele)
+			boolean s = (isSpanningEvent && vc.isMixed())
+					|| vc.getAlternateAlleles().contains(Allele.SPAN_DEL)
+					|| vc.getAlternateAlleles().contains(GaeaVCFConstants.SPANNING_DELETION_SYMBOLIC_ALLELE_DEPRECATED);
+			sawSpanningDeletion |= (isSpanningEvent && vc.isMixed())
+					|| vc.getAlternateAlleles().contains(Allele.SPAN_DEL)
+					|| vc.getAlternateAlleles().contains(GaeaVCFConstants.SPANNING_DELETION_SYMBOLIC_ALLELE_DEPRECATED);
+			sawNonSpanningEvent |= (!isSpanningEvent && vc.isMixed());
+
+			vcAndNewAllelePairs.add(new Pair<>(vc,
+					isSpanningEvent ? replaceWithNoCallsAndDels(vc) : remapAlleles(vc, refAllele, finalAlleleSet)));
+		}
+		// Add <DEL> and <NON_REF> to the end if at all required in the output.
+		if (sawSpanningDeletion && (sawNonSpanningEvent || !removeNonRefSymbolicAllele)) {
+			finalAlleleSet.add(Allele.SPAN_DEL);
+		}
+		if (!removeNonRefSymbolicAllele)
+			finalAlleleSet.add(GaeaVCFConstants.NON_REF_SYMBOLIC_ALLELE);
+
+		final List<Allele> allelesList = new ArrayList<>(finalAlleleSet);
+
+		boolean shouldComputePLs = allelesList
+				.size() <= GenotypeLikelihoods.MAX_DIPLOID_ALT_ALLELES_THAT_CAN_BE_GENOTYPED;
+		HashMap<String,Integer> appearedSamples=new HashMap<String,Integer>();
+		for (final Pair<VariantContext, List<Allele>> pair : vcAndNewAllelePairs) {
+			final VariantContext vc = pair.getFirst();
+			final List<Allele> remappedAlleles = pair.getSecond();
+
+			mergeRefConfidenceGenotypes(genotypes, vc, remappedAlleles, allelesList, samplesAreUniquified,
+					shouldComputePLs);
+			String sampleName=vc.getAttributeAsString("SM","");
+//			if(vc.getStart()==1002417){
+//				System.out.println(sampleName);
+//				for(String sm:appearedSamples.keySet()){
+//					System.out.println(sm+"\t"+appearedSamples.get(sm));
+//				}
+//			}
+			if(appearedSamples.containsKey(sampleName)){
+				depth-=appearedSamples.get(sampleName);
+				if(depth<0){
+					System.out.println("code error\n");
+					System.exit(-1);
+				}
+				appearedSamples.remove(sampleName);
+			}
+			// special case DP (add it up) for all events
+			if (vc.hasAttribute(VCFConstants.DEPTH_KEY)) {
+				depth += vc.getAttributeAsInt(VCFConstants.DEPTH_KEY, 0);
+				appearedSamples.put(sampleName,vc.getAttributeAsInt(VCFConstants.DEPTH_KEY, 0));
+			} else { // handle the gVCF case from the HaplotypeCaller
+				for (final Genotype gt : vc.getGenotypes()) {
+					depth += (gt.hasExtendedAttribute(GaeaVCFConstants.MIN_DP_FORMAT_KEY)
+							? Integer.parseInt((String) gt.getAnyAttribute(GaeaVCFConstants.MIN_DP_FORMAT_KEY))
+							: (gt.hasDP() ? gt.getDP() : 0));
+					if(gt.hasExtendedAttribute(GaeaVCFConstants.MIN_DP_FORMAT_KEY)){
+						appearedSamples.put(sampleName,Integer.parseInt((String) gt.getAnyAttribute(GaeaVCFConstants.MIN_DP_FORMAT_KEY)));
+					}else{
+						if(gt.hasDP()){
+							appearedSamples.put(sampleName,gt.getDP());
+						}
+					}
+				}
+			}
+//			if(loc.getStart()==1002417){
+//				System.out.println(vc+"\n"+depth);
+//			}
+			if (loc.getStart() != vc.getStart()) {
+				continue;
+			}
+
+			// special case ID (just preserve it)
+			if (vc.hasID())
+				rsIDs.add(vc.getID());
+
+			// add attributes to annotationMap, store all info field annotations
+			// as AlleleSpecificAnnotationData in case they can be parsed that
+			// way
+			addReferenceConfidenceAttributes(pair, annotationMap);
+		}
+		// combine the annotations that are reducible and remove them from
+		// annotationMap
+		Map<String, Object> combinedAnnotations = new HashMap<>();
+		if (annotatorEngine != null) {
+			combinedAnnotations = annotatorEngine.combineAnnotations(allelesList, annotationMap);
+		}
+		attributes.putAll(combinedAnnotations);
+
+		// remove stale AC and AF based attributes (including MLEAC and MLEAF
+		// lists)
+		// these will be recalculated after genotyping
+		removeStaleAttributesAfterMerge(annotationMap);
+
+		// annotatorEngine.combineAnnotations removed the successfully combined
+		// annotations, so now parse those that are left
+		// here we're assuming that things that are left are scalars per sample
+		Map<String, List<Comparable>> parsedAnnotationMap = parseRemainingAnnotations(annotationMap);
+
+		// when combining remaining annotations use the median value from all
+		// input VCs which had annotations provided
+		for (final Map.Entry<String, List<Comparable>> p : parsedAnnotationMap.entrySet()) {
+			if (!p.getValue().isEmpty()) {
+				//System.out.println(p.getKey()+p.getValue().toString());
+				//attributes.put(p.getKey(), combineAnnotationValues(p.getValue()));
+				attributes.put(p.getKey(), p.getValue());
+			}
+		}
+		//分样本combine时，可能会出现dp为0的变异，所以这里加上等号
+		if (depth >=0) {
+			attributes.put(VCFConstants.DEPTH_KEY, String.valueOf(depth));
+		}
+
+		final String ID = rsIDs.isEmpty() ? VCFConstants.EMPTY_ID_FIELD : Utils.join(",", rsIDs);
+
+		// note that in order to calculate the end position, we need a list of
+		// alleles that doesn't include anything symbolic
+		final VariantContextBuilder builder = new VariantContextBuilder().source(name).id(ID).alleles(allelesList)
+				.chr(loc.getContig()).start(loc.getStart())
+				.computeEndFromAlleles(nonSymbolicAlleles(allelesList), loc.getStart(), loc.getStart())
+				.genotypes(genotypes).unfiltered().attributes(new TreeMap<>(attributes))
+				.log10PError(CommonInfo.NO_LOG10_PERROR); // we will need to
+		// re-genotype later
+		return builder.make();
+	}
+	public static VariantContext reduceMerge(final List<VariantContext> VCs, final GenomeLocation loc, final Byte refBase,
+									   final boolean removeNonRefSymbolicAllele, final boolean samplesAreUniquified,
+									   final VariantAnnotatorEngine annotatorEngine) {
+		// this can happen if e.g. you are using a dbSNP file that spans a
+		// region with no gVCFs
+		if (VCs == null || VCs.isEmpty()) {
+			return null;
+		}
+		SimpleDateFormat formatter = new SimpleDateFormat("dd-MMM-yyyy HH:mm:ss:SSS");
+		// establish the baseline info (sometimes from the first VC)
+		final VariantContext first = VCs.get(0);
+		final String name = first.getSource();
+
+		// ref allele
+		final Allele refAllele = determineReferenceAlleleGivenReferenceBase(VCs, loc, refBase);
+		if (refAllele == null) {
+			return null;
+		}
+
+		// FinalAlleleSet contains the alleles of the new resulting VC
+		// Using linked set in order to guarantee a stable order
+		final LinkedHashSet<Allele> finalAlleleSet = new LinkedHashSet<>(10);
+		// Reference goes first
+		finalAlleleSet.add(refAllele);
+
+		final Map<String, Object> attributes = new LinkedHashMap<>();
+		final Set<String> rsIDs = new LinkedHashSet<>(1); // most of the time
+		// there's one id
+		int depth = 0;
+		final Map<String, List<ReducibleAnnotationData>> annotationMap = new LinkedHashMap<>();
+		final GenotypesContext genotypes = GenotypesContext.create();
+
+		// In this list we hold the mapping of each variant context alleles.
+		final List<Pair<VariantContext, List<Allele>>> vcAndNewAllelePairs = new ArrayList<>(VCs.size());
+		// Keep track of whether we saw a spanning deletion and a non-spanning
+		// event
+		boolean sawSpanningDeletion = false;
+		boolean sawNonSpanningEvent = false;
+		// cycle through and add info from the other VCs
+		for (final VariantContext vc : VCs) {
+
+			// if this context doesn't start at the current location then it
+			// must be a spanning event (deletion or ref block)
+			final boolean isSpanningEvent = loc.getStart() != vc.getStart();
+			// record whether it's also a spanning deletion/event (we know this
+			// because the VariantContext type is no
+			// longer "symbolic" but "mixed" because there are real alleles
+			// mixed in with the symbolic non-ref allele)
+			boolean s = (isSpanningEvent && vc.isMixed())
+					|| vc.getAlternateAlleles().contains(Allele.SPAN_DEL)
+					|| vc.getAlternateAlleles().contains(GaeaVCFConstants.SPANNING_DELETION_SYMBOLIC_ALLELE_DEPRECATED);
+			sawSpanningDeletion |= (isSpanningEvent && vc.isMixed())
+					|| vc.getAlternateAlleles().contains(Allele.SPAN_DEL)
+					|| vc.getAlternateAlleles().contains(GaeaVCFConstants.SPANNING_DELETION_SYMBOLIC_ALLELE_DEPRECATED);
+			sawNonSpanningEvent |= (!isSpanningEvent && vc.isMixed());
+
+			vcAndNewAllelePairs.add(new Pair<>(vc,
+					isSpanningEvent ? replaceWithNoCallsAndDels(vc) : remapAlleles(vc, refAllele, finalAlleleSet)));
+		}
+		// Add <DEL> and <NON_REF> to the end if at all required in the output.
+		if (sawSpanningDeletion && (sawNonSpanningEvent || !removeNonRefSymbolicAllele)) {
+			finalAlleleSet.add(Allele.SPAN_DEL);
+		}
+		if (!removeNonRefSymbolicAllele)
+			finalAlleleSet.add(GaeaVCFConstants.NON_REF_SYMBOLIC_ALLELE);
+
+		final List<Allele> allelesList = new ArrayList<>(finalAlleleSet);
+
+		boolean shouldComputePLs = allelesList
+				.size() <= GenotypeLikelihoods.MAX_DIPLOID_ALT_ALLELES_THAT_CAN_BE_GENOTYPED;
+
+		for (final Pair<VariantContext, List<Allele>> pair : vcAndNewAllelePairs) {
+			final VariantContext vc = pair.getFirst();
+			final List<Allele> remappedAlleles = pair.getSecond();
+			mergeRefConfidenceGenotypes(genotypes, vc, remappedAlleles, allelesList, samplesAreUniquified,
+					shouldComputePLs);
+
+			// special case DP (add it up) for all events
+
+			if (vc.hasAttribute(VCFConstants.DEPTH_KEY)) {
+				if(vc.getAttribute(VCFConstants.DEPTH_KEY,0) instanceof ArrayList){
+					System.out.println(vc.getAttribute(VCFConstants.DEPTH_KEY,0));
+				}else {
+					if(vc.getAttribute(VCFConstants.DEPTH_KEY,0) instanceof String) {
+						depth += vc.getAttributeAsInt(VCFConstants.DEPTH_KEY, 0);
+					}else{
+						System.out.println(vc.getAttribute(VCFConstants.DEPTH_KEY,0).getClass());
+					}
+				}
+			} else { // handle the gVCF case from the HaplotypeCaller
+				for (final Genotype gt : vc.getGenotypes()) {
+					depth += (gt.hasExtendedAttribute(GaeaVCFConstants.MIN_DP_FORMAT_KEY)
+							? Integer.parseInt((String) gt.getAnyAttribute(GaeaVCFConstants.MIN_DP_FORMAT_KEY))
+							: (gt.hasDP() ? gt.getDP() : 0));
+				}
+			}
+
+			if (loc.getStart() != vc.getStart()) {
+				continue;
+			}
+
+			// special case ID (just preserve it)
+			if (vc.hasID())
+				rsIDs.add(vc.getID());
+
+			// add attributes to annotationMap, store all info field annotations
+			// as AlleleSpecificAnnotationData in case they can be parsed that
+			// way
+			addReferenceConfidenceAttributes(pair, annotationMap);
+		}
+		// combine the annotations that are reducible and remove them from
+		// annotationMap
+		Map<String, Object> combinedAnnotations = new HashMap<>();
+		if (annotatorEngine != null) {
+			combinedAnnotations = annotatorEngine.combineAnnotations(allelesList, annotationMap);
+		}
+		attributes.putAll(combinedAnnotations);
+
+		// remove stale AC and AF based attributes (including MLEAC and MLEAF
+		// lists)
+		// these will be recalculated after genotyping
+		removeStaleAttributesAfterMerge(annotationMap);
+
+		// annotatorEngine.combineAnnotations removed the successfully combined
+		// annotations, so now parse those that are left
+		// here we're assuming that things that are left are scalars per sample
+		Map<String, List<Comparable>> parsedAnnotationMap = parseRemainingAnnotations2(annotationMap);
+
+		// when combining remaining annotations use the median value from all
+		// input VCs which had annotations provided
+		for (final Map.Entry<String, List<Comparable>> p : parsedAnnotationMap.entrySet()) {
+			if (!p.getValue().isEmpty()) {
+				//System.out.println(p.getKey()+p.getValue().toString());
+				attributes.put(p.getKey(), combineAnnotationValues(p.getValue()));
+			}
+		}
+
+		if (depth > 0) {
+			attributes.put(VCFConstants.DEPTH_KEY, String.valueOf(depth));
+		}
+
+		final String ID = rsIDs.isEmpty() ? VCFConstants.EMPTY_ID_FIELD : Utils.join(",", rsIDs);
+
+		// note that in order to calculate the end position, we need a list of
+		// alleles that doesn't include anything symbolic
+		final VariantContextBuilder builder = new VariantContextBuilder().source(name).id(ID).alleles(allelesList)
+				.chr(loc.getContig()).start(loc.getStart())
+				.computeEndFromAlleles(nonSymbolicAlleles(allelesList), loc.getStart(), loc.getStart())
+				.genotypes(genotypes).unfiltered().attributes(new TreeMap<>(attributes))
+				.log10PError(CommonInfo.NO_LOG10_PERROR); // we will need to
+		// re-genotype later
+		return builder.make();
+	}
 	/**
 	 * parse the annotations that were not identified as reducible annotations
 	 * and combined by the annotation engine
@@ -272,7 +579,56 @@ public class ReferenceConfidenceVariantContextMerger {
 		}
 		return parsedAnnotations;
 	}
+	private static Map<String, List<Comparable>> parseRemainingAnnotations2(
+			final Map<String, List<ReducibleAnnotationData>> annotationMap) {
+		final Map<String, List<Comparable>> parsedAnnotations = new HashMap<>();
+		for (Map.Entry<String, List<ReducibleAnnotationData>> currentData : annotationMap.entrySet()) {
+			List<Comparable> annotationValues = new ArrayList<>();
+			for (ReducibleAnnotationData value : currentData.getValue()) {
+				try {
+					final String stringValue = value.getRawData();
+					if(stringValue.contains(",")){
+						String[] eles=stringValue.split(",");
+						for(String ele:eles){
+							if (ele.contains(".")) {
+								annotationValues.add(Double.parseDouble(ele));
+							} else if (Character.isDigit(ele.charAt(0))) {
+								if (currentData.getKey().endsWith("Sum")) {
+									annotationValues.add(Double.parseDouble(ele));
+								} else {
+									annotationValues.add(Integer.parseInt(ele));
+								}
+							}
+						}
+						continue;
+					}
+					if (stringValue.contains(".")) {
+						annotationValues.add(Double.parseDouble(stringValue));
+					} else if (Character.isDigit(stringValue.charAt(0))) {
+						if(currentData.getKey().endsWith("Sum")) {
+							annotationValues.add(Double.parseDouble(stringValue));
+						}else {
+							annotationValues.add(Integer.parseInt(stringValue));
+						}
+						// TODO: uncomment this to parse dbSNP membership
+						// annotation once allele-specific merging for that
+						// attribute is added
+						/*
+						 * } else if (Character.isLetter(stringValue.charAt(0)))
+						 * { if (stringValue.equalsIgnoreCase("true"))
+						 * annotationValues.add(true); else if
+						 * (stringValue.equalsIgnoreCase("false"))
+						 * annotationValues.add(false);
+						 */
+					}
 
+				} catch (final NumberFormatException e) {
+				}
+			}
+			parsedAnnotations.put(currentData.getKey(), annotationValues);
+		}
+		return parsedAnnotations;
+	}
 	/**
 	 * Remove the stale attributes from the merged set
 	 *
@@ -407,7 +763,19 @@ public class ReferenceConfidenceVariantContextMerger {
 					final byte[] newBases = Arrays.copyOf(oldBases, oldBases.length + extraBaseCount);
 					System.arraycopy(refBases, refBases.length - extraBaseCount, newBases, oldBases.length,
 							extraBaseCount);
-					newAllele = Allele.create(newBases, false);
+//					byte[] tmpBases={'*','T','G'};
+//					if(Arrays.equals(newBases,tmpBases)){
+//						System.out.println("here");
+//					}
+					if(newBases[0]=='*'){
+						byte[] newBases2=new byte[newBases.length-1];
+						for(int i=1;i<newBases.length;i++){
+							newBases2[i-1]=newBases[i];
+						}
+						newAllele = Allele.create(newBases2, false);
+					}else {
+						newAllele = Allele.create(newBases, false);
+					}
 				} else
 					newAllele = a;
 				result.add(newAllele);

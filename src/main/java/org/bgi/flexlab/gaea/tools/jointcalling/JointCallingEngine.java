@@ -1,8 +1,6 @@
 package org.bgi.flexlab.gaea.tools.jointcalling;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
+import java.io.*;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -28,6 +26,7 @@ import org.bgi.flexlab.gaea.data.mapreduce.output.vcf.GaeaVCFOutputFormat;
 import org.bgi.flexlab.gaea.data.structure.location.GenomeLocation;
 import org.bgi.flexlab.gaea.data.structure.location.GenomeLocationParser;
 import org.bgi.flexlab.gaea.data.structure.reference.ChromosomeInformationShare;
+import org.bgi.flexlab.gaea.data.structure.vcf.VCFLocalLoader;
 import org.bgi.flexlab.gaea.tools.haplotypecaller.utils.RefMetaDataTracker;
 import org.bgi.flexlab.gaea.tools.jointcalling.annotator.RMSAnnotation;
 import org.bgi.flexlab.gaea.tools.jointcalling.annotator.RankSumTest;
@@ -43,6 +42,7 @@ import org.bgi.flexlab.gaea.util.FileIterator;
 import org.bgi.flexlab.gaea.util.GaeaVCFConstants;
 import org.seqdoop.hadoop_bam.LazyParsingGenotypesContext;
 import org.seqdoop.hadoop_bam.LazyVCFGenotypesContext.HeaderDataCache;
+import org.seqdoop.hadoop_bam.VariantContextWithHeader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -93,7 +93,7 @@ public class JointCallingEngine {
 	SimpleDateFormat formatter = new SimpleDateFormat("dd-MMM-yyyy HH:mm:ss:SSS");
 	private final VCFHeader vcfHeader;
 	private HashMap<Integer,HeaderDataCache> vcfHeaderDateCaches = null;
-	private HashMap<Integer,Set<String>> nameHeaders=new HashMap<Integer,Set<String>>(); 
+	private HashMap<Integer,Set<String>> nameHeaders=new HashMap<Integer,Set<String>>();
 	final Set<String> infoHeaderAltAllelesLineNames = new LinkedHashSet<>();
 	private Set<Integer> mapMergedSamples=new TreeSet<Integer>();
 	private int sampleSize = 0;
@@ -169,8 +169,9 @@ public class JointCallingEngine {
 		annotationEngine.invokeAnnotationInitializationMethods(headerLines, sampleNamesHashSet);
 		gvcfHeaderMetaInfo=multiHeaders.getMergeHeader().getMetaDataInInputOrder();
 		GvcfMathUtils.resetRandomGenerator();
-		
+
 	}
+
 	public JointCallingEngine(JointCallingOptions options, GenomeLocationParser parser, VCFHeader vcfheader,
 			MultipleVCFHeaderForJointCalling multiHeaders,String[] sampleArray,ArrayList<ArrayList<String> >multiMapSamples,Configuration conf) throws IllegalArgumentException, IOException{
 		variantsForSample = new TreeMap<Integer, ArrayList<VariantContext>>();
@@ -198,8 +199,11 @@ public class JointCallingEngine {
 		final Set<VCFHeaderLine> headerLines = new HashSet<VCFHeaderLine>();
 
 		headerLines.removeIf(vcfHeaderLine -> vcfHeaderLine.getKey().contains(GVCF_BLOCK));
-		
-		headerLines.addAll(vcfheader.getMetaDataInInputOrder());
+
+		headerLines.addAll(multiHeaders.getMergeHeader().getMetaDataInInputOrder());
+
+
+		//headerLines.addAll(vcfheader.getMetaDataInInputOrder());
 
 		headerLines.addAll(annotationEngine.getVCFAnnotationDescriptions());
 		headerLines.addAll(genotypingEngine.getAppropriateVCFInfoHeaders());
@@ -231,10 +235,18 @@ public class JointCallingEngine {
 //		String[] newSamples=new String[multiMapSamples.size()];
 //		int i=0;
 		HashMap<String, Integer> sampleIndex=new HashMap();
-		String sampleIndexFile=options.getOutput()+"/../vcfheaderinfo";
+		String sampleIndexFile=options.getOutDir()+"/vcfheaderinfo";
 		Path sampleIndexFilePath=new Path(sampleIndexFile);
 		FileSystem fs=sampleIndexFilePath.getFileSystem(conf);
-		BufferedReader reader = new BufferedReader(new InputStreamReader(fs.open(sampleIndexFilePath)));
+		BufferedReader reader=null;
+		if(sampleIndexFile.startsWith("hdfs:")){
+			reader = new BufferedReader(new InputStreamReader(fs.open(sampleIndexFilePath)));
+		}else {
+			if(sampleIndexFile.startsWith("file://")){
+				sampleIndexFile=sampleIndexFile.substring(7);
+			}
+			reader = new BufferedReader(new FileReader(sampleIndexFile));
+		}
 		String line;
 		Logger logger=LoggerFactory.getLogger(JointCallingEngine.class);
 		int totalSampleSize=0;
@@ -261,7 +273,16 @@ public class JointCallingEngine {
 		reader.close();
 		//create nameHeaders
 		
-		Path inputListPath=new Path(options.getInputList());
+
+		File rawInput=new File(options.getInputList());
+		String sortedInputGvcfList=rawInput.getParent()+"/sorted."+rawInput.getName();
+		if(sortedInputGvcfList.startsWith("file:")){
+			sortedInputGvcfList=sortedInputGvcfList.substring(5);
+		}
+		if(!sortedInputGvcfList.startsWith("file://")){
+			sortedInputGvcfList="file://"+sortedInputGvcfList;
+		}
+		Path inputListPath=new Path(sortedInputGvcfList);
 		BufferedReader inputListReader=new BufferedReader(new InputStreamReader(inputListPath.getFileSystem(conf).open(inputListPath)));
 		String pathLine;
 		String[] paths=new String[sampleIndex.size()];
@@ -278,20 +299,26 @@ public class JointCallingEngine {
 			Set<String> samples = new LinkedHashSet<String>();
 			for(String sm:mapSamples) {
 				samples.add(sm);
-				VCFHdfsLoader curSampleHeaderLoader=new VCFHdfsLoader(paths[sampleIndex.get(sm)]);
-				multiSamples.add(curSampleHeaderLoader.getHeader());
-				curSampleHeaderLoader.close();
+//				String samplePath=paths[sampleIndex.get(sm)];
+//				if(samplePath.startsWith("file://")){
+//					samplePath=samplePath.substring(7);
+//				}
+//				VCFLocalLoader curSampleHeaderLoader=new VCFLocalLoader(samplePath);
+//				multiSamples.add(curSampleHeaderLoader.getHeader());
+//				curSampleHeaderLoader.close();
 			}
-			MergedMultiSamplesHeader=smartMergeHeaders(multiSamples);
-			vcfHeaderDataCache.setHeader(MergedMultiSamplesHeader);
+//			MergedMultiSamplesHeader=smartMergeHeaders(multiSamples);
+//			vcfHeaderDataCache.setHeader(MergedMultiSamplesHeader);
 			Integer mergedSampleIndex=0;
+			int mapSamplesIndex=0;
             for(String sm:mapSamples) {
             	totalSamples.add(sm);
-            	mergedSampleIndex+=sampleIndex.get(sm);
+            	if(mapSamplesIndex==0) {
+					mergedSampleIndex = sampleIndex.get(sm);
+				}
+				mapSamplesIndex++;
             }
-            if(mergedSampleIndex<totalSampleSize) {
-            	mergedSampleIndex+=totalSampleSize*(mapSamples.size()+10);
-    		}
+			mergedSampleIndex+=totalSampleSize;
             nameHeaders.put(mergedSampleIndex, samples);
             mapMergedSamples.add(mergedSampleIndex);
 			//vcfHeaderDateCaches.put(mergedSampleIndex,vcfHeaderDataCache);
@@ -300,8 +327,8 @@ public class JointCallingEngine {
 		// now that we have all the VCF headers, initialize the annotations
 		// (this is particularly important to turn off RankSumTest dithering in
 		// integration tests)
-		
-		
+
+
 		Set<String> sampleNamesHashSet = new HashSet<>();
 		sampleNamesHashSet.addAll(totalSamples);
 		annotationEngine.invokeAnnotationInitializationMethods(headerLines, sampleNamesHashSet);
@@ -405,7 +432,116 @@ public class JointCallingEngine {
 			}
 		}
 	}
-	
+	public void lazyLoadForSpark(Iterator<VariantContext> iterator, GenomeLocation location) {
+		int curr = location.getStart();
+
+		if (curr <= max_position)
+			purgeOutOfScopeRecords(location);
+		else {
+			for (Integer sample : variantsForSample.keySet()) {
+				variantsForSample.get(sample).clear();
+			}
+			max_position = -1;
+		}
+
+		if (currentContext == null) {
+			if (iterator.hasNext()) {
+				currentContext = iterator.next();
+			}
+		}
+		while (currentContext != null) {
+			if (currentContext.getStart() > curr)
+				break;
+			if (currentContext.getStart() <= curr && currentContext.getEnd() >= curr) {
+				GenotypesContext gc = currentContext.getGenotypes();
+				String sampleName = currentContext.getAttributeAsString("SM", null);
+				if (sampleName == null) {
+					throw new UserException("Not contains SM attribute");
+				}
+				int sampleID = Integer.parseInt(sampleName);
+
+				if (gc instanceof LazyParsingGenotypesContext) {
+					VCFHeader header = new VCFHeader(gvcfHeaderMetaInfo, nameHeaders.get(sampleID));
+					HeaderDataCache datacache = new HeaderDataCache();
+					datacache.setHeader(header);
+					((LazyParsingGenotypesContext) gc).getParser().setHeaderDataCache(datacache);
+				}
+
+				if (variantsForSample.containsKey(sampleID)) {
+					variantsForSample.get(sampleID).add(currentContext);
+				} else {
+					ArrayList<VariantContext> list = new ArrayList<VariantContext>();
+					list.add(currentContext);
+					variantsForSample.put(sampleID, list);
+				}
+
+				if (max_position < currentContext.getEnd())
+					max_position = currentContext.getEnd();
+			}
+
+			if (iterator.hasNext()) {
+				currentContext = iterator.next();
+			} else {
+				currentContext = null;
+				max_position = -1;
+			}
+		}
+	}
+	public void lazyLoadForSpark2(Iterator<VariantContext> iterator, GenomeLocation location) {
+		int curr = location.getStart();
+
+		if (curr <= max_position)
+			purgeOutOfScopeRecords(location);
+		else {
+			for (Integer sample : variantsForSample.keySet()) {
+				variantsForSample.get(sample).clear();
+			}
+			max_position = -1;
+		}
+
+		if (currentContext == null) {
+			if (iterator.hasNext()) {
+				currentContext = iterator.next();
+			}
+		}
+		while (currentContext != null) {
+			if (currentContext.getStart() > curr)
+				break;
+			if (currentContext.getStart() <= curr && currentContext.getEnd() >= curr) {
+				GenotypesContext gc = currentContext.getGenotypes();
+				String sampleName = currentContext.getAttributeAsString("SM", null);
+				if (sampleName == null)
+					throw new UserException("Not contains SM attribute");
+
+				int sampleID = Integer.parseInt(sampleName);
+
+				if (gc instanceof LazyParsingGenotypesContext) {
+					VCFHeader header = new VCFHeader(gvcfHeaderMetaInfo, nameHeaders.get(sampleID));
+					HeaderDataCache datacache = new HeaderDataCache();
+					datacache.setHeader(header);
+					((LazyParsingGenotypesContext) gc).getParser().setHeaderDataCache(datacache);
+				}
+
+				if (variantsForSample.containsKey(sampleID)) {
+					variantsForSample.get(sampleID).add(currentContext);
+				} else {
+					ArrayList<VariantContext> list = new ArrayList<VariantContext>();
+					list.add(currentContext);
+					variantsForSample.put(sampleID, list);
+				}
+
+				if (max_position < currentContext.getEnd())
+					max_position = currentContext.getEnd();
+			}
+
+			if (iterator.hasNext()) {
+				currentContext = iterator.next();
+			} else {
+				currentContext = null;
+				max_position = -1;
+			}
+		}
+	}
 	private VariantContext getValues(int sample,GenomeLocation loc,boolean requireStartHere){
 		if(variantsForSample.containsKey(sample) && variantsForSample.get(sample).size() > 0){
 			for(VariantContext vc : variantsForSample.get(sample)){
@@ -447,9 +583,7 @@ public class JointCallingEngine {
 			ChromosomeInformationShare ref) {
 		if (location.getStart() != location.getStop())
 			throw new UserException("location must length is 1!");
-//		System.out.println(formatter.format(new Date())+"\tbefore lazyload");
 		lazyLoad(iterator, location);
-//		System.out.println(formatter.format(new Date())+"\tafter lazyload, before getValues");
 //		for(Entry<Integer, ArrayList<VariantContext> > entry:variantsForSample.entrySet()) {
 //			System.out.println(entry.getKey()+"\t"+entry.getValue().size());
 //			for(VariantContext tmpVC:entry.getValue()) {
@@ -460,10 +594,63 @@ public class JointCallingEngine {
 		final Byte refBase = INCLUDE_NON_VARIANTS ? (byte) ref.getBase(location.getStart() - 1) : null;
 		final boolean removeNonRefSymbolicAllele = !INCLUDE_NON_VARIANTS;
 		final VariantContext combinedVC = ReferenceConfidenceVariantContextMerger.merge(vcsAtThisLocus, location,
-				refBase, removeNonRefSymbolicAllele, uniquifySamples, annotationEngine);	
+				refBase, removeNonRefSymbolicAllele, uniquifySamples, annotationEngine);
 		return combinedVC == null ? null : regenotypeVC(new RefMetaDataTracker(location), ref, combinedVC);
 	}
-
+	public VariantContext variantCallingReduce(Iterator<VariantContextWritable> iterator, GenomeLocation location,
+										 ChromosomeInformationShare ref) {
+		if (location.getStart() != location.getStop())
+			throw new UserException("location must length is 1!");
+		lazyLoad(iterator, location);
+//		for(Entry<Integer, ArrayList<VariantContext> > entry:variantsForSample.entrySet()) {
+//			System.out.println(entry.getKey()+"\t"+entry.getValue().size());
+//			for(VariantContext tmpVC:entry.getValue()) {
+//				System.out.println(tmpVC);
+//			}
+//		}
+		final List<VariantContext> vcsAtThisLocus = getValues(location);
+		final Byte refBase = INCLUDE_NON_VARIANTS ? (byte) ref.getBase(location.getStart() - 1) : null;
+		final boolean removeNonRefSymbolicAllele = !INCLUDE_NON_VARIANTS;
+		final VariantContext combinedVC = ReferenceConfidenceVariantContextMerger.reduceMerge(vcsAtThisLocus, location,
+				refBase, removeNonRefSymbolicAllele, uniquifySamples, annotationEngine);
+		return combinedVC == null ? null : regenotypeVC(new RefMetaDataTracker(location), ref, combinedVC);
+	}
+	public VariantContext variantCallingForSpark(Iterator<VariantContext> iterator, GenomeLocation location,
+												 ChromosomeInformationShare ref) {
+		if (location.getStart() != location.getStop())
+			throw new UserException("location must length is 1!");
+		lazyLoadForSpark(iterator, location);
+//		for(Entry<Integer, ArrayList<VariantContext> > entry:variantsForSample.entrySet()) {
+//			System.out.println(entry.getKey()+"\t"+entry.getValue().size());
+//			for(VariantContext tmpVC:entry.getValue()) {
+//				System.out.println(tmpVC);
+//			}
+//		}
+		final List<VariantContext> vcsAtThisLocus = getValues(location);
+		final Byte refBase = INCLUDE_NON_VARIANTS ? (byte) ref.getBase(location.getStart() - 1) : null;
+		final boolean removeNonRefSymbolicAllele = !INCLUDE_NON_VARIANTS;
+		final VariantContext combinedVC = ReferenceConfidenceVariantContextMerger.reduceMerge(vcsAtThisLocus, location,
+				refBase, removeNonRefSymbolicAllele, uniquifySamples, annotationEngine);
+		return combinedVC == null ? null : regenotypeVC(new RefMetaDataTracker(location), ref, combinedVC);
+	}
+	public VariantContext variantCallingForSpark2(Iterator<VariantContext> iterator, GenomeLocation location,
+												 ChromosomeInformationShare ref) {
+		if (location.getStart() != location.getStop())
+			throw new UserException("location must length is 1!");
+		lazyLoadForSpark2(iterator, location);
+//		for(Entry<Integer, ArrayList<VariantContext> > entry:variantsForSample.entrySet()) {
+//			System.out.println(entry.getKey()+"\t"+entry.getValue().size());
+//			for(VariantContext tmpVC:entry.getValue()) {
+//				System.out.println(tmpVC);
+//			}
+//		}
+		final List<VariantContext> vcsAtThisLocus = getValues(location);
+		final Byte refBase = INCLUDE_NON_VARIANTS ? (byte) ref.getBase(location.getStart() - 1) : null;
+		final boolean removeNonRefSymbolicAllele = !INCLUDE_NON_VARIANTS;
+		final VariantContext combinedVC = ReferenceConfidenceVariantContextMerger.reduceMerge(vcsAtThisLocus, location,
+				refBase, removeNonRefSymbolicAllele, uniquifySamples, annotationEngine);
+		return combinedVC == null ? null : regenotypeVC(new RefMetaDataTracker(location), ref, combinedVC);
+	}
 	protected VariantContext regenotypeVC(final RefMetaDataTracker tracker, final ChromosomeInformationShare ref,
 			final VariantContext originalVC) {
 		if (originalVC == null) {
@@ -473,23 +660,19 @@ public class JointCallingEngine {
 		}
 
 		VariantContext result = originalVC;
-		
 		// don't need to calculate quals for sites with no data whatsoever
 		if (result.getAttributeAsInt(VCFConstants.DEPTH_KEY, 0) > 0) {
 			result = genotypingEngine.calculateGenotypes(originalVC);
 		}
-
 		if (result == null || (!isProperlyPolymorphic(result) && !INCLUDE_NON_VARIANTS)) {
 			return null;
 		}
-
 		result = addGenotypingAnnotations(originalVC.getAttributes(), result);
 		// At this point we should already have DP and AD annotated
 		result = annotationEngine.finalizeAnnotations(result, originalVC);
 		// do trimming after allele-specific annotation reduction or the mapping
 		// is difficult
 		result = GaeaGvcfVariantContextUtils.reverseTrimAlleles(result);
-
 		// Re-annotate and fix/remove some of the original annotations.
 		// Note that the order of these actions matters and is different for
 		// polymorphic and monomorphic sites.
@@ -509,7 +692,6 @@ public class JointCallingEngine {
 		} else {
 			return null;
 		}
-		
 		result = removeInfoAnnotationsIfNoAltAllele(result);
 		return result;
 	}

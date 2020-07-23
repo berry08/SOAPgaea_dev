@@ -52,9 +52,7 @@ public class JointCallingMapper extends
 		VariantContext variantContext = value.get();
 		int sWin = variantContext.getStart() / windowSize ;
 		int eWin = variantContext.getEnd() / windowSize;
-		
 		int chrIndex = chrIndexs.get(variantContext.getContig());
-
 		for (int i = sWin; i <= eWin; i++) {
 			outKey.set(chrIndex, i, variantContext.getStart());
 			context.write(outKey, value);

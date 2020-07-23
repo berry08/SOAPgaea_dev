@@ -16,6 +16,9 @@ import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.GenotypeLikelihoods;
 import htsjdk.variant.variantcontext.GenotypesContext;
 import htsjdk.variant.variantcontext.VariantContext;
+import org.bgi.flexlab.gaea.util.MathUtils;
+
+import static java.lang.Math.pow;
 
 public abstract class DiploidExactAFCalculator extends ExactAFCalculator {
 	private static final double LOG10_OF_2 = GvcfMathUtils.Log10Cache.get(2);
@@ -28,38 +31,199 @@ public abstract class DiploidExactAFCalculator extends ExactAFCalculator {
                                                final double[] log10AlleleFrequencyPriors, final StateTracker stateTracker) {
         final int numAlternateAlleles = vc.getNAlleles() - 1;
 
-        final ArrayList<double[]> genotypeLikelihoods = getGLs(vc.getGenotypes(), true, vc.hasAllele(GaeaVCFConstants.NON_REF_SYMBOLIC_ALLELE),vc.getStart()==104160);
-        
-        final int numSamples = genotypeLikelihoods.size()-1;
-        final int numChr = 2*numSamples;
+        final ArrayList<double[]> genotypeLikelihoods = getGLs(vc.getGenotypes(), true, vc.hasAllele(GaeaVCFConstants.NON_REF_SYMBOLIC_ALLELE));
+        //raw code
+//        final int numSamples = genotypeLikelihoods.size()-1;
+//        final int numChr = 2*numSamples;
+//
+//        // queue of AC conformations to process
+//        final LinkedList<ExactACset> ACqueue = new LinkedList<>();
+//
+//        // mapping of ExactACset indexes to the objects
+//        final HashMap<ExactACcounts, ExactACset> indexesToACset = new HashMap<>(numChr+1);
+//
+//        // add AC=0 to the queue
+//        final int[] zeroCounts = new int[numAlternateAlleles];
+//        ExactACset zeroSet = new ExactACset(numSamples+1, new ExactACcounts(zeroCounts));
+//        ACqueue.add(zeroSet);
+//        indexesToACset.put(zeroSet.getACcounts(), zeroSet);
+//
+//        while ( !ACqueue.isEmpty() ) {
+//            stateTracker.incNEvaluations(); // keep track of the number of evaluations
+//
+//            // compute log10Likelihoods
+//            final ExactACset set = ACqueue.remove();
+//
+//            calculateAlleleCountConformation(set, genotypeLikelihoods, numChr, ACqueue,
+//                    indexesToACset, log10AlleleFrequencyPriors,stateTracker);
+//
+//            // clean up memory
+//            indexesToACset.remove(set.getACcounts());
+//            //if ( DEBUG )
+//            //    System.out.printf(" *** removing used set=%s%n", set.ACcounts);
+//        }
+        //raw code ends
+        //EM algorithm
 
-        // queue of AC conformations to process
-        final LinkedList<ExactACset> ACqueue = new LinkedList<>();
+        final int numSamples3 = genotypeLikelihoods.size()-1;
+        final int numChr3 = 2*numSamples3;
+        double af=0.5;
+        int iter=0;
+        double lastAf=0;
+        for(int j=1;j<=numSamples3;j++) {
+            double[] gls = genotypeLikelihoods.get(j);
+            for (int k = 0; k < 3; k++) {
+                gls[k] = pow(10, gls[k]);
+            }
+        }
+        for(int i=1;i<=100;i++){
+            double totalSum=0;
+            for(int j=1;j<=numSamples3;j++) {
+                double[] gls = genotypeLikelihoods.get(j);
+                double fenzi=0+1*gls[1]*2*af*(1-af)+2*gls[2]*af*af;
+                double fenmu=gls[0]*(1-af)*(1-af)+gls[1]*2*af*(1-af)+gls[2]*af*af;
+                totalSum+=fenzi/fenmu;
+            }
+            af=totalSum/numChr3;
+            if(Math.abs(af-lastAf)<1.0/(numChr3*100) || af<1.0/(numChr3*5)){
+                iter=i;
+                break;
+            }
+            lastAf=af;
+        }
+        double dAC=af*numChr3;
+        int ac=(int)(dAC+0.5d);
+        int acCutoff=100;
+        final ArrayList<double[]> genotypeLikelihoods3 = getGLs(vc.getGenotypes(), true, vc.hasAllele(GaeaVCFConstants.NON_REF_SYMBOLIC_ALLELE));
+        final LinkedList<ExactACset> ACqueue3 = new LinkedList<>();
 
-        // mapping of ExactACset indexes to the objects
-        final HashMap<ExactACcounts, ExactACset> indexesToACset = new HashMap<>(numChr+1);
+        final HashMap<ExactACcounts, ExactACset> indexesToACset3 = new HashMap<>(numChr3+1);
 
-        // add AC=0 to the queue
-        final int[] zeroCounts = new int[numAlternateAlleles];
-        ExactACset zeroSet = new ExactACset(numSamples+1, new ExactACcounts(zeroCounts));
-        ACqueue.add(zeroSet);
-        indexesToACset.put(zeroSet.getACcounts(), zeroSet);
+        final int[] zeroCounts3 = new int[numAlternateAlleles];
+        ExactACset zeroSet3 = new ExactACset(numSamples3+1, new ExactACcounts(zeroCounts3));
+        ACqueue3.add(zeroSet3);
+        indexesToACset3.put(zeroSet3.getACcounts(), zeroSet3);
+        while ( !ACqueue3.isEmpty() ) {
+            stateTracker.incNEvaluations();
+            final ExactACset set = ACqueue3.remove();
+            calculateAlleleCountConformation(set, genotypeLikelihoods3, numChr3, ACqueue3,
+                    indexesToACset3, log10AlleleFrequencyPriors,stateTracker);
+            indexesToACset3.remove(set.getACcounts());
+            if(stateTracker.getNEvaluations()>=10 && ac>acCutoff){
+                break;
+            }
+        }
+        if(!ACqueue3.isEmpty()) {
+            int[] updateAC = new int[1];
+            updateAC[0] = stateTracker.getNEvaluations() - 2;
+            int startAC=updateAC[0];
+            if (ac > acCutoff) {
+                double curMle=stateTracker.log10MLE;
+                double virtualMLE = curMle > -2.0 ? curMle * 0.5 : -2.0;
+                double interval = (virtualMLE - curMle) / (ac - startAC);
 
-        while ( !ACqueue.isEmpty() ) {
-            stateTracker.incNEvaluations(); // keep track of the number of evaluations
-
-            // compute log10Likelihoods
-            final ExactACset set = ACqueue.remove();
-
-            calculateAlleleCountConformation(set, genotypeLikelihoods, numChr, ACqueue,
-                    indexesToACset, log10AlleleFrequencyPriors,stateTracker);
-
-            // clean up memory
-            indexesToACset.remove(set.getACcounts());
-            //if ( DEBUG )
-            //    System.out.printf(" *** removing used set=%s%n", set.ACcounts);
+                for(int i=0;i<ac-startAC;i++) {
+                    updateAC[0]++;
+                    double newMle = stateTracker.log10MLE + interval;
+                    stateTracker.updateMLEifNeeded(newMle, updateAC);
+                    newMle += log10AlleleFrequencyPriors[updateAC[0]];
+                    stateTracker.updateMAPifNeeded(newMle, updateAC);
+                    stateTracker.incNEvaluations();
+                    if(i==ac-startAC-1){
+                        for(int j=0;j<3;j++) {
+                            curMle=stateTracker.log10MLE;
+                            newMle = curMle - 1.5 * interval;
+                            updateAC[0]++;
+                            if(updateAC[0]>numChr3){
+                                break;
+                            }
+                            stateTracker.updateMLEifNeeded(newMle, updateAC);
+                            newMle += log10AlleleFrequencyPriors[updateAC[0]];
+                            stateTracker.updateMAPifNeeded(newMle, updateAC);
+                            stateTracker.incNEvaluations();
+                        }
+                    }
+                }
+            }
         }
 
+        //EM code ends
+
+        //filter sample code start
+        /*
+        if(ac==-100) {
+            final ArrayList<double[]> genotypeLikelihoods2 = getGLs2(vc.getGenotypes(), true, vc.hasAllele(GaeaVCFConstants.NON_REF_SYMBOLIC_ALLELE));
+            final int numSamples = genotypeLikelihoods.size() - 1;
+            final int numChr = 2 * numSamples;
+
+            //reduced
+            final int numSamples2 = genotypeLikelihoods2.size() - 1;
+            final int numChr2 = 2 * numSamples2;
+            // queue of AC conformations to process
+            final LinkedList<ExactACset> ACqueue = new LinkedList<>();
+            final LinkedList<ExactACset> ACqueue2 = new LinkedList<>();
+
+            // mapping of ExactACset indexes to the objects
+            final HashMap<ExactACcounts, ExactACset> indexesToACset = new HashMap<>(numChr + 1);
+            final HashMap<ExactACcounts, ExactACset> indexesToACset2 = new HashMap<>(numChr + 1);
+
+            // add AC=0 to the queue
+            final int[] zeroCounts = new int[numAlternateAlleles];
+            ExactACset zeroSet = new ExactACset(numSamples + 1, new ExactACcounts(zeroCounts));
+            // reduced
+            ExactACset zeroSet2 = new ExactACset(numSamples2 + 1, new ExactACcounts(zeroCounts));
+            ACqueue.add(zeroSet);
+            ACqueue2.add(zeroSet2);
+            indexesToACset.put(zeroSet.getACcounts(), zeroSet);
+            indexesToACset2.put(zeroSet2.getACcounts(), zeroSet2);
+            StateTracker stateTracker2 = new StateTracker(stateTracker.getAlleleCountsOfMAP().length);
+
+
+            // compute log10Likelihoods
+            ExactACset set2 = ACqueue.remove();
+            computeLofK(set2, genotypeLikelihoods, log10AlleleFrequencyPriors, stateTracker2);
+            final double log10LofK = set2.getLog10Likelihoods()[set2.getLog10Likelihoods().length - 1];
+            indexesToACset.remove(set2.getACcounts());
+            indexesToACset.clear();
+            set2 = null;
+            genotypeLikelihoods.clear();
+            stateTracker2 = null;
+            // clean up memory
+
+            //reduced
+            while (!ACqueue2.isEmpty()) {
+                stateTracker.incNEvaluations(); // keep track of the number of evaluations
+
+                // compute log10Likelihoods
+                final ExactACset set = ACqueue2.remove();
+
+                calculateAlleleCountConformation(set, genotypeLikelihoods2, numChr2, ACqueue2,
+                        indexesToACset2, log10AlleleFrequencyPriors, stateTracker);
+
+                // clean up memory
+                indexesToACset2.remove(set.getACcounts());
+                //if ( DEBUG )
+                //    System.out.printf(" *** removing used set=%s%n", set.ACcounts);
+            }
+            int addACs = 0;
+            for (HashMap.Entry<Integer, Integer> kv : ExactAFCalculator.excludedACs.entrySet()) {
+                if (kv.getKey() == 1) {
+                    addACs += kv.getValue();
+                } else if (kv.getKey() == 2) {
+                    addACs += 2 * kv.getValue();
+                }
+            }
+
+            stateTracker.setLog10LikelihoodOfAFzero(log10LofK);
+            stateTracker.setLog10PosteriorOfAFzero(log10LofK + log10AlleleFrequencyPriors[0]);
+            double curMLE = log10LofK;
+            int[] updateAC = new int[1];
+            updateAC[0] = (int) MathUtils.sum(stateTracker.getAlleleCountsOfMAP()) + addACs;
+            stateTracker.updateMLEifNeeded(stateTracker.log10MLE + 1, updateAC);
+            excludedACs.clear();
+        }
+        */
+        //filter sample code ends
         return getResultFromFinalState(vc, log10AlleleFrequencyPriors, stateTracker);
     }
 

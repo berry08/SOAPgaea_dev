@@ -89,9 +89,10 @@ import htsjdk.variant.vcf.VCFUtils;
 
 public class JointCallingPrepareMapper extends
 	Mapper<LongWritable, Text, WindowsBasedWritable, Text>{
-	
+	public static HashMap<Integer,Long> accumulate=new HashMap<>();
 	//private int windowSize = 10000;
 	//private int thread_num=10;
+	public static Long refLength=0L;
 	private Logger logger = LoggerFactory.getLogger(JointCallingPrepareMapper.class);
 	private int run_times=0;
 	private int processed_samples=0;
@@ -159,6 +160,7 @@ public class JointCallingPrepareMapper extends
 		conf = context.getConfiguration();
 		options = new JointCallingPrepareOptions();
 		options.getOptionsFromHadoopConf(conf);
+		System.out.println(accumulate.size());
 		FileSplit fileSplit = (FileSplit)context.getInputSplit();
 		final Path list_file=fileSplit.getPath();
 		final FileSystem fs = list_file.getFileSystem(context.getConfiguration());
@@ -219,6 +221,8 @@ public class JointCallingPrepareMapper extends
 		mapSamplePath.clear();
 		logger.warn("pathSample size:\t"+pathSample.size());
 		indexReader.close();
+
+
 		realMapperNumber=Integer.parseInt(conf.get(JointCallingPrepare.Real_Mappers));
 		Path path = new Path(conf.get(GaeaVCFOutputFormat.OUT_PATH_PROP));
 		//SeekableStream in = WrapSeekable.openPath(vVCF.getFileSystem(conf), vVCF);
@@ -277,6 +281,15 @@ public class JointCallingPrepareMapper extends
 			contigs.put(line.getContigIndex(), line.getID());
 		}
 		windowSize = options.getWindowsSize();
+
+
+		for (Map.Entry<Integer, String> entry : contigs.entrySet()) {
+			// System.out.println(entry.getKey()+"\t"+entry.getValue());
+			String chr = entry.getValue();
+			int contigLength = merged_header.getSequenceDictionary().getSequence(chr).getSequenceLength();
+			accumulate.put(entry.getKey(), refLength);
+			refLength += contigLength;
+		}
 	}
 	
 	@Override
@@ -297,12 +310,17 @@ public class JointCallingPrepareMapper extends
 		Path samplePathPath=new Path(value.toString());
 		BufferedReader reader=new BufferedReader(new InputStreamReader(new GZIPInputStream(samplePathPath.getFileSystem(conf).open(samplePathPath))));
 		String line;
+		String lastChr="chr0";
+		int lastPos=0;
 		while((line=reader.readLine())!=null) {
 			if(line.startsWith("#")) {
 				continue;
 			}
 			final VariantContext v = tmp_codec.decode(line);
 			Integer start_=v.getStart();
+//			if(start_>1000000 || chrIndexs.get(v.getContig())>1){
+//				break;
+//			}
 			if(v.getNAlleles()>2) {
 				Integer chrIndex=chrIndexs.get(v.getContig());
 				String outString=chrIndex+"\t"+v.getStart()+"\t"+v.getEnd();
@@ -314,7 +332,18 @@ public class JointCallingPrepareMapper extends
 					outKey.set(chrIndex, j, v.getStart());
 					context.write(outKey, outvalue);
 				}
+				if(!lastChr.equals(v.getContig())){
+					System.out.println("cur process chr:\t"+v.getContig());
+					lastChr=v.getContig();
+					lastPos=0;
+				}
+				if(lastPos<v.getStart()/10000000){
+					System.out.println("cur process pos:\t"+v.getStart());
+					lastPos=v.getStart()/10000000;
+				}
 			}
+
+
 		}
 	}
 }

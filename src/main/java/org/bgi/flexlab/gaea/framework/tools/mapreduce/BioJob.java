@@ -32,7 +32,8 @@ import org.seqdoop.hadoop_bam.SAMFormat;
 import java.io.IOException;
 import java.util.List;
 
-public class BioJob extends Job {
+public class
+BioJob extends Job {
 
 	@SuppressWarnings("deprecation")
 	private BioJob(Configuration conf) throws IOException {

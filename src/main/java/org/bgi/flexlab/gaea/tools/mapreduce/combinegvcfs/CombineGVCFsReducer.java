@@ -149,7 +149,7 @@ public class CombineGVCFsReducer extends Reducer<WindowsBasedWritable, VariantCo
 				continue;
 			}else {
 				
-				VariantContext variantContext=engine.variantCalling2(tmp_vcs.iterator(), parser.createGenomeLocation(chr,last_pos,it-1), genomeShare.getChromosomeInfo(chr));
+				VariantContext variantContext=engine.variantCalling3(tmp_vcs.iterator(), parser.createGenomeLocation(chr,last_pos,it-1), genomeShare.getChromosomeInfo(chr));
 				if (variantContext == null)
 					continue;
 				CommonInfo info = variantContext.getCommonInfo();

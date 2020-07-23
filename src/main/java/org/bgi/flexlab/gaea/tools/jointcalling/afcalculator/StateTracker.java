@@ -37,7 +37,7 @@ final class StateTracker {
      * vector is exceeed -- because we've pushed more posteriors than there's space to hold
      * -- we simply sum up the existing values, make that the first value, and continue.
      */
-    private final double[] log10LikelihoodsForAFGt0 = new double[LIKELIHOODS_CACHE_SIZE];
+    public final double[] log10LikelihoodsForAFGt0 = new double[LIKELIHOODS_CACHE_SIZE];
     private static final int LIKELIHOODS_CACHE_SIZE = 5000;
     private int log10LikelihoodsForAFGt0CacheIndex = 0;
 
@@ -127,10 +127,11 @@ final class StateTracker {
      */
     private double getLog10LikelihoodOfAFNotZero() {
         if ( log10LikelihoodsForAFGt0Sum == null ) {
-            if ( log10LikelihoodsForAFGt0CacheIndex == 0 ) // there's nothing to sum up, so make the sum equal to the smallest thing we have
+            if ( log10LikelihoodsForAFGt0CacheIndex == 0 ) { // there's nothing to sum up, so make the sum equal to the smallest thing we have
                 log10LikelihoodsForAFGt0Sum = MathUtils.LOG10_P_OF_ZERO;
-            else
+            }else {
                 log10LikelihoodsForAFGt0Sum = MathUtils.log10sumLog10(log10LikelihoodsForAFGt0, 0, log10LikelihoodsForAFGt0CacheIndex);
+            }
         }
         return log10LikelihoodsForAFGt0Sum;
     }
@@ -165,7 +166,6 @@ final class StateTracker {
             final double log10PRef = alleleCountsOfMAP[i] > 0 ? -10000 : 0; // TODO -- a total hack but in effect what the old behavior was
             log10pRefByAllele.put(allele, log10PRef);
         }
-
         return new AFCalculationResult(subACOfMLE, nEvaluations, allelesUsedInGenotyping, log10Likelihoods, log10Priors, log10pRefByAllele);
     }
 

@@ -204,7 +204,7 @@ public class CombineGVCFsEngine extends JointCallingEngine {
         return false;
     }
 	
-	public VariantContext variantCalling2(Iterator<VariantContext> iterator, GenomeLocation location,
+	public VariantContext variantCalling3(Iterator<VariantContext> iterator, GenomeLocation location,
 			ChromosomeInformationShare ref) {
 		
 		//lazyLoad(iterator, location);

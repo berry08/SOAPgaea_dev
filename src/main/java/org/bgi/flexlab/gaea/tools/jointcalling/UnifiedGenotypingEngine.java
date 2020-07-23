@@ -1,13 +1,7 @@
 package org.bgi.flexlab.gaea.tools.jointcalling;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.text.SimpleDateFormat;
+import java.util.*;
 
 import org.bgi.flexlab.gaea.data.exception.UserException;
 import org.bgi.flexlab.gaea.data.structure.location.GenomeLocation;
@@ -297,6 +291,7 @@ public class UnifiedGenotypingEngine {
 
 		// if input VC can't be genotyped, exit with either null VCC or, in case
 		// where we need to emit all sites, an empty call
+		SimpleDateFormat formatter = new SimpleDateFormat("dd-MMM-yyyy HH:mm:ss:SSS");
 		if (hasTooManyAlternativeAlleles(vc) || vc.getNSamples() == 0)
 			return null;
 
@@ -305,13 +300,10 @@ public class UnifiedGenotypingEngine {
 		final int maxNumPLValues = options.getMaxNumberPLValues();
 		final AFCalculator afCalculatorForAlleleSubsetting = afCalculatorProvider.getInstance(vc,defaultPloidy,maxAltAlleles).setMaxNumPLValues(maxNumPLValues);
         final AFCalculator afCalculatorForQualScore = options.USE_NEW_AF_CALCULATOR ? newAFCalculator : afCalculatorForAlleleSubsetting;
-
+		//慢在这里
         final AFCalculationResult AFresult = afCalculatorForQualScore.getLog10PNonRef(vc, defaultPloidy,maxAltAlleles, getAlleleFrequencyPriors(vc,defaultPloidy,model));
-
         final OutputAlleleSubset outputAlternativeAlleles = calculateOutputAlleleSubset(AFresult, vc);
-
 		final double PoFGT0 = Math.pow(10, AFresult.getLog10PosteriorOfAFGT0());
-
 		// note the math.abs is necessary because -10 * 0.0 => -0.0 which isn't
 		// nice
 		final double log10Confidence = !outputAlternativeAlleles.siteIsMonomorphic
@@ -321,7 +313,6 @@ public class UnifiedGenotypingEngine {
 
 		// Add 0.0 removes -0.0 occurrences.
 		final double phredScaledConfidence = (-10.0 * log10Confidence) + 0.0;
-
 		// return a null call if we don't pass the confidence cutoff or the most
 		// likely allele frequency is zero
 		// skip this if we are already looking at a vc with a NON_REF allele
@@ -341,7 +332,6 @@ public class UnifiedGenotypingEngine {
 		final List<Allele> outputAlleles = outputAlternativeAlleles.outputAlleles(vc.getReference());
 		final VariantContextBuilder builder = new VariantContextBuilder("UG_JOINT_CALL", loc.getContig(),
 				loc.getStart(), loc.getStop(), outputAlleles);
-
 		builder.log10PError(log10Confidence);
 		if (!passesCallThreshold(phredScaledConfidence))
 			builder.filter(GaeaVCFConstants.LOW_QUAL_FILTER_NAME);
@@ -351,18 +341,15 @@ public class UnifiedGenotypingEngine {
 		//final GenotypesContext genotypes = afCalculator.subsetAlleles(vc, defaultPloidy, outputAlleles, true);
 		final GenotypesContext genotypes = afCalculatorForAlleleSubsetting.subsetAlleles(vc, defaultPloidy, outputAlleles, true);
 		builder.genotypes(genotypes);
-
 		// *** note that calculating strand bias involves overwriting data
 		// structures, so we do that last
 		final Map<String, Object> attributes = composeCallAttributes(inheritAttributesFromInputVC, vc,
 				outputAlternativeAlleles.alternativeAlleleMLECounts(), outputAlternativeAlleles.siteIsMonomorphic,
 				AFresult, outputAlternativeAlleles.outputAlleles(vc.getReference()), genotypes, model,
 				doAlleleSpecificCalcs);
-
 		builder.attributes(attributes);
 
 		VariantContext vcCall = builder.make();
-
 		return new VariantCallContext(vcCall, confidentlyCalled(phredScaledConfidence, PoFGT0));
 	}
 

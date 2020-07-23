@@ -87,7 +87,7 @@ import htsjdk.variant.vcf.VCFHeaderVersion;
 import htsjdk.variant.vcf.VCFUtils;
 
 public class JointCallingMapperHuge extends
-	Mapper<LongWritable, Text, NullWritable, VariantContextWritable>{
+	Mapper<LongWritable, Text, WindowsBasedWritable, VariantContextWritable>{
 	
 	//private int windowSize = 10000;
 	//private int thread_num=10;
@@ -149,6 +149,7 @@ public class JointCallingMapperHuge extends
 			return t1.getStart()-t2.getStart();
 		}
 	};
+	public static HashMap<Integer,Long> accumulate=new HashMap<>();
 //	CloseableTribbleIterator<VariantContext>[] vc_iter_array=new CloseableTribbleIterator[patch_samples];
 	@Override
 	protected void setup(Context context) throws IOException, InterruptedException {//setup在map函数前运行，只运行一次
@@ -226,7 +227,7 @@ public class JointCallingMapperHuge extends
 		//Set<VCFHeader> mapMultiSamplesHeaderSet=new HashSet<VCFHeader>();
 		Integer sISize=sampleIndex.size();
 		int i=0;
-		
+		int mapGvcfListIndex=0;
 		for(String gvcfPath:mapGvcfList) {
 			Path path2=new Path(gvcfPath);
 //			SeekableStream in2 = WrapSeekable.openPath(path2.getFileSystem(conf), path2);
@@ -237,7 +238,10 @@ public class JointCallingMapperHuge extends
 			}
 			String sampleName=pathSample.get(eles[eles.length-1]);
 			sampleNames.add(sampleName);
-			mapSMtagInt+=sampleIndex.get(sampleName);
+			if(mapGvcfListIndex==0) {
+				mapSMtagInt = sampleIndex.get(sampleName);
+			}
+			mapGvcfListIndex++;
 			if(version==null) {
 				for (final VCFHeaderLine line : gvcfHeaderMetaInfo) {
 					if (VCFHeaderVersion.isFormatString(line.getKey())) {
@@ -275,9 +279,9 @@ public class JointCallingMapperHuge extends
 		logger.warn("mapGvcfList Size:\t"+mapGvcfList.size());
 		pathSample.clear();
 		sampleIndex.clear();
-		if(mapSMtagInt<totalSampleSize) {
-			mapSMtagInt+=totalSampleSize*(sISize+10);
-		}
+		logger.warn("totalSampleSize:\t"+totalSampleSize+"\tmapSMtagInt:\t"+mapSMtagInt);
+		mapSMtagInt+=totalSampleSize;
+		System.out.println("mapSMtag:\t"+mapSMtagInt);
 		mapMergedHeader=new VCFHeader(gvcfHeaderMetaInfo,sampleNames);
 		//mapMergedHeader=getVCFHeaderFromInput(mapMultiSamplesHeaderSet);
 		vcfHeaderDataCache.setHeader(mapMergedHeader);
@@ -297,7 +301,15 @@ public class JointCallingMapperHuge extends
 		for (VCFContigHeaderLine line : merged_header.getContigLines()) {
 			contigs.put(line.getContigIndex(), line.getID());
 		}
-		
+		Long refLength=0L;
+		for (Map.Entry<Integer, String> entry : contigs.entrySet()) {
+			// System.out.println(entry.getKey()+"\t"+entry.getValue());
+			String chr = entry.getValue();
+			int contigLength = merged_header.getSequenceDictionary().getSequence(chr).getSequenceLength();
+			accumulate.put(entry.getKey(), refLength);
+			refLength += contigLength;
+		}
+		WindowsBasedWritable winBW=new WindowsBasedWritable(accumulate,0L,refLength,options.getReducerNumber());
 		windowSize = options.getWindowsSize();
 		parser = new GenomeLocationParser(merged_header.getSequenceDictionary());
 		
@@ -336,6 +348,9 @@ public class JointCallingMapperHuge extends
 		if(run_times>1) {
 			return;
 		}
+
+		Integer number=0;
+		Integer lastchrIndex=-1;
 		//BufferedReader win_reader=new BufferedReader(new FileReader(conf.get(JointCallingPrepare.Window_File)));
 		String winFilePath=conf.get(JointCalling.Window_File);
 		//FileSystem fs=FileSystem.get(URI.create(winFilePath),conf);
@@ -390,6 +405,9 @@ public class JointCallingMapperHuge extends
 		Integer last_end=0;
 		Integer last_pos=0;
 		Integer last_real_pos=-1;
+		Integer last_bp_start=-1;
+		Integer last_bp_end=-1;
+		Set<Integer> last_end_breakpoints=new TreeSet<Integer>();
 		while((win_line=win_reader.readLine())!=null) {
 			if(logOut)
 				System.out.println(formatter.format(new Date())+"\tmap start\t"+win_line);
@@ -401,6 +419,9 @@ public class JointCallingMapperHuge extends
 			String contig=eles[0];
 			Integer start=Integer.valueOf(eles[1]);
 			Integer end=Integer.valueOf(eles[2]);
+			if(start>10000000){
+				break;
+			}
 			String chr = contig;
 			Integer curLogPoint=(int)start/5000000;
 			if(!curLogPoint.equals(lastLogPoint)) {
@@ -410,6 +431,12 @@ public class JointCallingMapperHuge extends
 			}
 			lastLogPoint=curLogPoint;
 			Integer winChrID=chrIndexs.get(contig);
+			if(last_bp_start!=-1){
+				bpStarts.add(start);
+				bpEnds.add(last_bp_end);
+				last_bp_start=-1;
+				last_bp_end=-1;
+			}
 			while(!bpFileEnd) {
 				if(bpcontig.equals(winChrID)) {
 					if(bpstart<=end && bpend>=start) {
@@ -426,6 +453,10 @@ public class JointCallingMapperHuge extends
 						bpstart=Integer.valueOf(bpeles[1]);
 						bpend=Integer.valueOf(bpeles[2]);
 					}else if(bpstart>end) {
+						if(bpend>end){
+							last_bp_start=bpstart;
+							last_bp_end=bpend;
+						}
 						break;
 					}else {
 						winLine=bp_reader.readLine();
@@ -548,10 +579,14 @@ public class JointCallingMapperHuge extends
 				if(whether_keep) {
 					realBreakpointStart.add(last_pos);
 					realBreakpointEnd.add(pos);
+					if(pos>end){
+						last_end_breakpoints.add(pos);
+					}
 					last_real_pos=pos+1;
 				}
 				last_pos=pos+1;
 			}
+
 			if(region_vcs.size()>0) {
 				if(logOut) {
 					System.out.println(formatter.format(new Date())+"\tvc number in this region:\t"+region_vcs.size()+"\tcurSamplesVC:\t"+curSamplesVC.size()+"\tbpStarts:\t"+bpStarts.size()+"\tend_breakpoints:\t"+end_breakpoints.size()+"\trealBreakpoints:\t"+realBreakpointStart.size());
@@ -564,12 +599,11 @@ public class JointCallingMapperHuge extends
 				last_end=0;
 			}
 			//last_pos=0;
+			int tmpIter=0;
 			for(int i=0;i!=realBreakpointStart.size();i++) {
 				Integer posStart=realBreakpointStart.get(i);
-				if(posStart>1100000) {
-					break;
-				}
 				Integer pos=realBreakpointEnd.get(i);
+
 				if(pos>end) {
 					break;
 				}
@@ -613,16 +647,21 @@ public class JointCallingMapperHuge extends
 		            int curStart=last_end+1;
 		            if ( containsTrueAltAllele(stoppedVCs) ) {
 		            	vNum++;
-		                mergedVC = ReferenceConfidenceVariantContextMerger.merge(stoppedVCs, parser.createGenomeLocation(chr, posStart), (byte) ref.getBase(posStart-1), false, false, annotationEngine);
+		                mergedVC = ReferenceConfidenceVariantContextMerger.mapMerge(stoppedVCs, parser.createGenomeLocation(chr, posStart), (byte) ref.getBase(posStart-1), false, false, annotationEngine);
+						tmpIter++;
+//						if(mergedVC.getStart()==1002417){
+//							System.out.println(mergedVC+"\n"+mergedVC.getAttribute("DP"));
+//						}
 		            }else {
 		                mergedVC = referenceBlockMerge(stoppedVCs, gLoc,refBase, pos);
+//						if(mergedVC.getStart()==1002417){
+//							System.out.println(mergedVC+"\n"+mergedVC.getAttribute("DP"));
+//						}
 		            }
 		            if(mergedVC==null) {
-		            	VariantContextWritable outvalue=new VariantContextWritable();
-		            	outvalue.set(stoppedVCs.get(0),mapMergedHeader);
-						context.write(NullWritable.get(), outvalue);
 		            	continue;
 					}
+
 		            CommonInfo info = mergedVC.getCommonInfo();
 		    		if(!info.hasAttribute("SM"))
 		    			info.putAttribute("SM",mapSMtagInt);
@@ -634,11 +673,17 @@ public class JointCallingMapperHuge extends
 					int sWin = mergedVC.getStart() / windowSize ;
 					int eWin = mergedVC.getEnd() / windowSize;
 					int chrIndex = chrIndexs.get(mergedVC.getContig());
-//					for (int j = sWin; j <= eWin; j++) {
-//						outKey.set(chrIndex, j, mergedVC.getStart());
-//						context.write(outKey, outvalue);
-//					}
-					context.write(NullWritable.get(), outvalue);
+					if(lastchrIndex==chrIndex){
+						number++;
+					}else{
+						System.out.println(lastchrIndex+"\t"+number);
+						number=1;
+					}
+					lastchrIndex=chrIndex;
+					for (int j = sWin; j <= eWin; j++) {
+						outKey.set(chrIndex, j, mergedVC.getStart());
+						context.write(outKey, outvalue);
+					}
 					stoppedVCs.clear();
 		        }
 				last_end=pos;

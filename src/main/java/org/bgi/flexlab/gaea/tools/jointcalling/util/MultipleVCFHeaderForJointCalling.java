@@ -19,6 +19,9 @@ import org.bgi.flexlab.gaea.data.mapreduce.input.vcf.VCFHdfsLoader;
 import org.bgi.flexlab.gaea.data.mapreduce.output.vcf.GaeaVCFOutputFormat;
 import org.bgi.flexlab.gaea.data.mapreduce.output.vcf.VCFHdfsWriter;
 import org.bgi.flexlab.gaea.data.structure.header.GaeaVCFHeader;
+import org.bgi.flexlab.gaea.data.structure.vcf.VCFFileWriter;
+import org.bgi.flexlab.gaea.data.structure.vcf.VCFLocalLoader;
+import org.bgi.flexlab.gaea.data.structure.vcf.VCFLocalWriter;
 import org.bgi.flexlab.gaea.util.FileIterator;
 import org.seqdoop.hadoop_bam.LazyVCFGenotypesContext.HeaderDataCache;
 import org.seqdoop.hadoop_bam.util.VCFHeaderReader;
@@ -80,7 +83,6 @@ public class MultipleVCFHeaderForJointCalling extends GaeaVCFHeader implements S
 		getHeaders(paths, outdir, conf);
 		writeMergeHeaders(conf);
 	}
-
 	public static Set<String> getSampleList(Set<VCFHeader> headers) {
 		Set<String> samples = new TreeSet<String>();
 		for (VCFHeader header : headers) {
@@ -264,10 +266,19 @@ public class MultipleVCFHeaderForJointCalling extends GaeaVCFHeader implements S
 		} catch (IOException e) {
 			throw new UserException(e.toString());
 		}
-        vcfHdfsWriter.writeHeader(this.mergeHeader);
-        vcfHdfsWriter.close();
+		vcfHdfsWriter.writeHeader(this.mergeHeader);
+		vcfHdfsWriter.close();
 	}
-
+	private void writeMergeHeadersLocal(Configuration conf) {
+		VCFLocalWriter vcfHdfsWriter = null;
+		try {
+			vcfHdfsWriter = new VCFLocalWriter(conf.get(GaeaVCFOutputFormat.OUT_PATH_PROP), false, false);
+		} catch (IOException e) {
+			throw new UserException(e.toString());
+		}
+		vcfHdfsWriter.writeHeader(this.mergeHeader);
+		vcfHdfsWriter.close();
+	}
 	public int getHeaderSize() {
 		return this.currentIndex;
 	}
@@ -275,7 +286,15 @@ public class MultipleVCFHeaderForJointCalling extends GaeaVCFHeader implements S
 	public VCFHeader getMergeHeader() {
 		return mergeHeader;
 	}
-
+	public void setMergeHeader(VCFHeader mergeHeader){
+		this.mergeHeader=mergeHeader;
+	}
+	public void setNameHeaders(HashMap<Integer, Set<String>> NameHeaders){
+		this.nameHeaders.putAll(NameHeaders);
+	}
+	public void setCurrentIndex(int index){
+		this.currentIndex=index;
+	}
 	public void close() {
 		if (outputStream != null) {
 			try {
@@ -292,4 +311,5 @@ public class MultipleVCFHeaderForJointCalling extends GaeaVCFHeader implements S
 		headers.clear();
 		//vcfHeaderDateCaches.clear();
 	}
+
 }
