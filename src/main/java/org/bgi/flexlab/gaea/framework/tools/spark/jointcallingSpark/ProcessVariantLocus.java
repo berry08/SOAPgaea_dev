@@ -2,63 +2,35 @@ package org.bgi.flexlab.gaea.framework.tools.spark.jointcallingSpark;
 
 import htsjdk.samtools.seekablestream.SeekableFileStream;
 import htsjdk.samtools.seekablestream.SeekableStream;
-import htsjdk.samtools.util.BlockCompressedInputStream;
-import htsjdk.samtools.util.BlockCompressedOutputStream;
-import htsjdk.tribble.AbstractFeatureReader;
 import htsjdk.tribble.TabixFeatureReader;
-import htsjdk.tribble.TribbleIndexedFeatureReader;
-import htsjdk.tribble.index.Index;
-import htsjdk.tribble.index.IndexFactory;
-import htsjdk.tribble.index.linear.LinearIndex;
-import htsjdk.tribble.index.tabix.TabixFormat;
-import htsjdk.tribble.index.tabix.TabixIndex;
-import htsjdk.tribble.index.tabix.TabixIndexCreator;
-import htsjdk.tribble.util.LittleEndianOutputStream;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.*;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.spark.api.java.function.FlatMapFunction;
-import org.apache.spark.api.java.function.MapFunction;
 import org.apache.spark.api.java.function.PairFlatMapFunction;
 import org.apache.spark.broadcast.Broadcast;
-import org.apache.spark.util.SerializableConfiguration;
-import org.bgi.flexlab.gaea.data.mapreduce.output.vcf.GaeaVCFOutputFormat;
 import org.bgi.flexlab.gaea.data.structure.location.GenomeLocation;
-import org.bgi.flexlab.gaea.data.structure.reference.index.VcfIndex;
-import org.seqdoop.hadoop_bam.VCFFormat;
-import org.seqdoop.hadoop_bam.util.BGZFBlockIndex;
-import org.seqdoop.hadoop_bam.util.BGZFCodec;
 import org.seqdoop.hadoop_bam.util.VCFHeaderReader;
-import org.seqdoop.hadoop_bam.util.WrapSeekable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import scala.Tuple2;
 
 import java.io.*;
-import java.net.URI;
 import java.util.*;
-import java.util.zip.GZIPInputStream;
-
-import static htsjdk.tribble.index.IndexFactory.IndexBalanceApproach.FOR_SEEK_TIME;
-import static htsjdk.tribble.index.IndexFactory.IndexBalanceApproach.FOR_SIZE;
-import static htsjdk.tribble.index.IndexFactory.IndexType.TABIX;
-import static htsjdk.tribble.index.tabix.TabixFormat.VCF;
 
 
 public class ProcessVariantLocus implements PairFlatMapFunction<String, GenomeLongRegion, Integer> {
-    public GenomeLongRegion processRegion;
-    public ArrayList<GenomeLocation> regions=new ArrayList<>();
-    public Set<VCFHeaderLine> gvcfHeaderMetaInfo;
-    public String vVcfPath;
-    public static Logger logger = LoggerFactory.getLogger(ProcessVariantLocus.class);
-    public VCFHeaderVersion version = null;
-    public VCFEncoder vcfEncoder=null;
-    public VCFHeader mergedHeader=null;
-    public String outputDir;
-    public DriverBC dBC;
+    private final GenomeLongRegion processRegion;
+    private final ArrayList<GenomeLocation> regions=new ArrayList<>();
+    private Set<VCFHeaderLine> gvcfHeaderMetaInfo;
+    private final String vVcfPath;
+    private static final Logger logger = LoggerFactory.getLogger(ProcessVariantLocus.class);
+    private VCFHeaderVersion version = null;
+    private VCFEncoder vcfEncoder=null;
+    private VCFHeader mergedHeader=null;
+    private final String outputDir;
+    private final DriverBC dBC;
     public static HashMap<String,BufferedReader> sampleReaders=new HashMap<>();
     public ProcessVariantLocus(GenomeLongRegion region,ArrayList<GenomeLocation> regions,Broadcast<DriverBC> dBC) throws IOException {
         this.processRegion=region;
@@ -69,12 +41,10 @@ public class ProcessVariantLocus implements PairFlatMapFunction<String, GenomeLo
         SeekableStream in=new SeekableFileStream(new File(vVcfPath));
         VCFHeader virtualHeader = VCFHeaderReader.readHeaderFrom(in);
         gvcfHeaderMetaInfo=virtualHeader.getMetaDataInInputOrder();
-        if(version==null) {
-            for (final VCFHeaderLine line : gvcfHeaderMetaInfo) {
-                if (VCFHeaderVersion.isFormatString(line.getKey())) {
-                    version = VCFHeaderVersion.toHeaderVersion(line.getValue());
-                    break;
-                }
+        for (final VCFHeaderLine line : gvcfHeaderMetaInfo) {
+            if (VCFHeaderVersion.isFormatString(line.getKey())) {
+                version = VCFHeaderVersion.toHeaderVersion(line.getValue());
+                break;
             }
         }
     }
@@ -141,6 +111,10 @@ public class ProcessVariantLocus implements PairFlatMapFunction<String, GenomeLo
 //        }
         sampleReader=new TabixFeatureReader(s,query_codec);
         logger.info("current process sample:\t"+s);
+        logger.info("region size:\t"+regions.size());
+        for(GenomeLocation curRegion:regions){
+            logger.info(curRegion.toString());
+        }
         for(GenomeLocation curGloc:regions) {
             logger.info("extract bps:\t"+curGloc.getStart()+"\t"+curGloc.getEnd());
             Iterator<VariantContext> it = sampleReader.query(curGloc.getContig(), curGloc.getStart(), curGloc.getEnd());

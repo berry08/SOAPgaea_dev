@@ -25,6 +25,7 @@ import org.bgi.flexlab.gaea.data.exception.OutOfBoundException;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
+import java.util.HashMap;
 
 public class WindowsBasedWritable implements WritableComparable<WindowsBasedWritable> {
 	private LongWritable windowsInfo = new LongWritable();
@@ -41,6 +42,20 @@ public class WindowsBasedWritable implements WritableComparable<WindowsBasedWrit
 	private final static int SAMPLE_BITS_MASK = (int) (Math.pow(2, SAMPLE_BITS) - 1);
 	private final static int WINDOW_NUMBER_MASK = (int) (Math.pow(2, WINDOW_NUMBER_BITS) - 1);
 
+	//added by gc
+	//是为了对位置进行全局排序，进而让group有序的分配给reduce，而不是穿插的顺序
+	public static HashMap<Integer,Long> accumulate=new HashMap<>();
+	public static Long realStart=0L;
+	public static Long realEnd=0L;
+	public static Integer partitionsNum=1;
+	public WindowsBasedWritable(HashMap<Integer,Long> chrAccLength,Long start,Long end,Integer parNum){
+		accumulate=chrAccLength;
+		realStart=start;
+		realEnd=end;
+		partitionsNum=parNum;
+	}
+	public WindowsBasedWritable(){
+	}
 	public void set(long sample, long chromosome, long winNum, int pos) {
 		if (sample >= MAX_SAMPLE_ID)
 			throw new OutOfBoundException(String.format("sample size %d is more than 4194304", (int) sample));
@@ -113,11 +128,34 @@ public class WindowsBasedWritable implements WritableComparable<WindowsBasedWrit
 		return ((windowsInfo.hashCode() * 163 + position.hashCode()) & 0xffffffff);
 	}
 
+	//修改成全局排序的
+
 	public int partition() {
+		/*原代码
 		int hashcode = (getChromosomeIndex() + 1);
 		hashcode += (getWindowsNumber()+1);
 		hashcode += (getSampleID() + 1);
 		return (int)(hashcode & 0xffffffff);
+		*/
+
+		//修改后代码
+		if(accumulate.size()>0) {
+			//全局排序方式
+			Integer chrIndex = getChromosomeIndex();
+			Long curPos = position.get() + accumulate.get(chrIndex);
+			Long band = (long) ((realEnd - realStart) * 1.1 / partitionsNum);
+			if (band == 0) {
+				System.out.println("input data is empty or un-recognized");
+				System.exit(-1);
+			}
+			return (int) ((curPos - realStart) / band);
+		}else{
+			//老方式，穿插的排序
+			int hashcode = (getChromosomeIndex() + 1);
+			hashcode += (getWindowsNumber()+1);
+			hashcode += (getSampleID() + 1);
+			return (int)(hashcode & 0xffffffff);
+		}
 	}
 
 	@Override

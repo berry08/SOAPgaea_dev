@@ -108,7 +108,6 @@ public class DbsnpShare extends WholeGenomeShare {
 		if (!dbsnpInfo.containsKey(chrName)){
 			return -1;
 		}
-
 		return dbsnpInfo.get(chrName).getStartPosition(startWinNum, endWinNum,winSize);
 	}
 

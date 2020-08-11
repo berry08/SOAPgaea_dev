@@ -40,7 +40,7 @@ public class JointCallingSparkOptions extends JointCallingOptions implements Had
 	private String dbsnp = null;//k
 	private String MAGIC_HEADER_LINE = VCFCodec.VCF4_MAGIC_HEADER;//F
 
-	//private String winFile=null;//W
+	private long regionSize=100000000;//W
 
 	private double snpHeterozygosity = 1e-3;//b
 	private double indelHeterozygosity = 1.0/8000;//B
@@ -92,7 +92,7 @@ public class JointCallingSparkOptions extends JointCallingOptions implements Had
 		addOption("u","uniquifySamples",false,"Assume duplicate samples are present and uniquify all names with '.variant' and file number index");
 		addOption("U","useNewAFCalculator",false,"Use new AF model instead of the so-called exact model");
 		addOption("w", "keyWindow", true, "window size for key[5000]");
-		//addOption("W","windowsFile",true,"whole genome bed file"); //no need for window file input, it will be created by program
+		addOption("W","regionSize",true,"region size per cycle process"); //no need for window file input, it will be created by program
 		FormatHelpInfo(SOFTWARE_NAME,SOFTWARE_VERSION);
 	}
 
@@ -136,8 +136,9 @@ public class JointCallingSparkOptions extends JointCallingOptions implements Had
 		this.MAX_ALTERNATE_ALLELES = getOptionIntValue("M",6);
 		this.MAX_NUM_PL_VALUES = getOptionIntValue("m",100);
 		this.windows_size = getOptionIntValue("w",5000);
-		this.num_reducer = getOptionIntValue("n",100);
 		this.num_mapper=getOptionIntValue("N", 100);
+		this.num_reducer = getOptionIntValue("n",100);
+
 		this.tmpOut=getOptionValue("t",null);
 		this.output = getOptionValue("o",null);
 		this.reference = getOptionValue("r",null);
@@ -146,7 +147,7 @@ public class JointCallingSparkOptions extends JointCallingOptions implements Had
 		parseOutputMode(getOptionValue("O",OutputMode.EMIT_VARIANTS_ONLY.toString()));
 		parseGenotypeMode(getOptionValue("G",GenotypingOutputMode.DISCOVERY.toString()));
 		
-		//this.winFile=getOptionValue("W",null);//added by gc. Windows file of ref
+		this.regionSize=getOptionLongValue("W",100000000L);//added by gc
 		this.targetRegion=getOptionValue("l",null);
 		this.ANNOTATE_ALL_SITES_WITH_PL = getOptionBooleanValue("a",false);
 		this.ANNOTATE_NUMBER_OF_ALLELES_DISCOVERED = getOptionBooleanValue("A",false);
@@ -342,5 +343,13 @@ public class JointCallingSparkOptions extends JointCallingOptions implements Had
 	}
 	public double gets(){
 		return this.STANDARD_CONFIDENCE_FOR_EMITTING;
+	}
+
+	public long getRegionSize() {
+		return regionSize;
+	}
+
+	public void setRegionSize(long regionSize) {
+		this.regionSize = regionSize;
 	}
 }

@@ -96,8 +96,8 @@ public class JointCalling extends ToolsRunner{
 	public int run(String[] args) throws Exception {
 		BioJob job = BioJob.getInstance();
         Configuration conf = job.getConfiguration();
-        conf.setBoolean(Job.MAP_OUTPUT_COMPRESS, true);
-        conf.setClass(Job.MAP_OUTPUT_COMPRESS_CODEC, GzipCodec.class, CompressionCodec.class);
+//        conf.setBoolean(Job.MAP_OUTPUT_COMPRESS, true);
+//        conf.setClass(Job.MAP_OUTPUT_COMPRESS_CODEC, GzipCodec.class, CompressionCodec.class);
         String[] remainArgs = remainArgs(args, conf);
         JointCallingOptions options = new JointCallingOptions();
         options.parse(remainArgs);//获得header等信息
@@ -167,7 +167,7 @@ public class JointCalling extends ToolsRunner{
         conf.set(INPUT_LIST,options.getInputList()); 
         //create windows bed file based on window size
         conf.set(Window_File, options.getTmpOut()+"/windows.bed");
-        
+
         File tmpOutDir=new File(options.getTmpOut());
         if(!tmpOutDir.exists()) {
         	tmpOutDir.mkdirs();

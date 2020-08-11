@@ -279,11 +279,18 @@ public class JointCallingEngine {
 		if(sortedInputGvcfList.startsWith("file:")){
 			sortedInputGvcfList=sortedInputGvcfList.substring(5);
 		}
-		if(!sortedInputGvcfList.startsWith("file://")){
-			sortedInputGvcfList="file://"+sortedInputGvcfList;
+		BufferedReader inputListReader=null;
+		File sparkOrMapreducePosition=new File(sortedInputGvcfList);
+		if(sparkOrMapreducePosition.exists()) {
+			if (!sortedInputGvcfList.startsWith("file://")) {
+				sortedInputGvcfList = "file://" + sortedInputGvcfList;
+			}
+			Path inputListPath = new Path(sortedInputGvcfList);
+			inputListReader = new BufferedReader(new InputStreamReader(inputListPath.getFileSystem(conf).open(inputListPath)));
+		}else{
+			sortedInputGvcfList=options.getOutDir()+"/sorted."+rawInput.getName();
+			inputListReader=new BufferedReader(new FileReader(sortedInputGvcfList));
 		}
-		Path inputListPath=new Path(sortedInputGvcfList);
-		BufferedReader inputListReader=new BufferedReader(new InputStreamReader(inputListPath.getFileSystem(conf).open(inputListPath)));
 		String pathLine;
 		String[] paths=new String[sampleIndex.size()];
 		int i=0;

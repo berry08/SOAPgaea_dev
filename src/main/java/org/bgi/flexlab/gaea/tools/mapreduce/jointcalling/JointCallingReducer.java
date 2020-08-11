@@ -131,9 +131,9 @@ public class JointCallingReducer
 		if(header2 == null)
 			throw new RuntimeException("header is null !!!");
 		String bpFile=options.getTmpOut()+"/AllBPs";
-		bp_reader=new BufferedReader(new FileReader(bpFile));
-		winLine=bp_reader.readLine();
-		System.out.println("reduce setup done");
+//		bp_reader=new BufferedReader(new FileReader(bpFile));
+//		winLine=bp_reader.readLine();
+//		System.out.println("reduce setup done");
 	}
 
 	@Override

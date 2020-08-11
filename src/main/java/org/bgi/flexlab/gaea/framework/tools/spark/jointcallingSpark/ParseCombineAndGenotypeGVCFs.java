@@ -3,6 +3,8 @@ package org.bgi.flexlab.gaea.framework.tools.spark.jointcallingSpark;
 
 import htsjdk.samtools.seekablestream.SeekableFileStream;
 import htsjdk.samtools.seekablestream.SeekableStream;
+import htsjdk.samtools.util.BlockCompressedInputStream;
+import htsjdk.samtools.util.BlockCompressedOutputStream;
 import htsjdk.variant.variantcontext.CommonInfo;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.VCFCodec;
@@ -12,13 +14,10 @@ import htsjdk.variant.vcf.VCFHeader;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.io.NullWritable;
-import org.apache.spark.api.java.function.FlatMapFunction;
 import org.apache.spark.api.java.function.Function2;
-import org.apache.spark.api.java.function.VoidFunction;
 import org.apache.spark.broadcast.Broadcast;
+import org.apache.spark.util.LongAccumulator;
 import org.bgi.flexlab.gaea.data.mapreduce.output.vcf.GaeaVCFOutputFormat;
-import org.bgi.flexlab.gaea.data.mapreduce.util.VariantContextHadoopWriter;
 import org.bgi.flexlab.gaea.data.structure.dbsnp.DbsnpShare;
 import org.bgi.flexlab.gaea.data.structure.location.GenomeLocation;
 import org.bgi.flexlab.gaea.data.structure.location.GenomeLocationParser;
@@ -26,17 +25,11 @@ import org.bgi.flexlab.gaea.data.structure.reference.ReferenceShare;
 import org.bgi.flexlab.gaea.data.structure.reference.index.VcfIndex;
 import org.bgi.flexlab.gaea.data.structure.vcf.VCFLocalLoader;
 import org.bgi.flexlab.gaea.data.variant.filter.VariantRegionFilter;
-import org.bgi.flexlab.gaea.tools.annotator.util.Tuple;
 import org.bgi.flexlab.gaea.tools.jointcalling.JointCallingEngine;
 import org.bgi.flexlab.gaea.tools.jointcalling.util.MultipleVCFHeaderForJointCalling;
-import org.bgi.flexlab.gaea.tools.mapreduce.jointcalling.JointCallingOptions;
-import org.seqdoop.hadoop_bam.VariantContextCodec;
-import org.seqdoop.hadoop_bam.VariantContextWithHeader;
 import org.seqdoop.hadoop_bam.util.VCFHeaderReader;
-import org.seqdoop.hadoop_bam.util.WrapSeekable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import scala.Tuple2;
 
 import java.io.*;
 import java.text.SimpleDateFormat;
@@ -45,7 +38,7 @@ import java.util.*;
 public class ParseCombineAndGenotypeGVCFs implements Function2<Integer,Iterator<String>,Iterator<String>> {
     private HashMap<Integer, String> contigs = null;
     private JointCallingEngine engine = null;
-    private HashMap<String,Integer> chrIndexs = new HashMap<>();
+//    private HashMap<String,Integer> chrIndexs = new HashMap<>();
     private GenomeLocationParser parser = null;
     private ReferenceShare genomeShare = null;
     private DbsnpShare dbsnpShare = null;
@@ -53,22 +46,24 @@ public class ParseCombineAndGenotypeGVCFs implements Function2<Integer,Iterator<
     private VariantRegionFilter filter = null;
     private VCFHeader header = null;
     private VCFHeader header2=null;
-    private MultipleVCFHeaderForJointCalling headers = new MultipleVCFHeaderForJointCalling();
-    private ArrayList<ArrayList<String>> multiMapSampleNames=new ArrayList<ArrayList<String> >();
+    private final MultipleVCFHeaderForJointCalling headers = new MultipleVCFHeaderForJointCalling();
+//    private ArrayList<ArrayList<String>> multiMapSampleNames=new ArrayList<ArrayList<String> >();
     private VCFEncoder vcfEncoder=null;
-    public BufferedReader bp_reader=null;
-    public String winLine=null;
-    public GenomeLongRegion region=null;
-    SimpleDateFormat formatter = new SimpleDateFormat("dd-MMM-yyyy HH:mm:ss:SSS");
-    HashMap<String, String> confMap=new HashMap<>();
-    String bpFile;
-    String[] args;
-    DriverBC dBC;
-    public  ArrayList<GenomeLocation> regions=new ArrayList<>();
-    public int cycleIter;
-    public ArrayList<Long> bpPartition=new ArrayList<>();
-    public ParseCombineAndGenotypeGVCFs(GenomeLongRegion region, ArrayList<GenomeLocation> regions,String[] args, String outputBP, HashMap<String, String> confMap,
-                            Broadcast<DriverBC> dBC,int cycleIter,ArrayList<Long> bpPartition) {
+//    public BufferedReader bp_reader=null;
+private String winLine=null;
+    private GenomeLongRegion region=null;
+    private final SimpleDateFormat formatter = new SimpleDateFormat("dd-MMM-yyyy HH:mm:ss:SSS");
+    private HashMap<String, String> confMap=new HashMap<>();
+    private final String bpFile;
+    private final String[] args;
+    private final DriverBC dBC;
+    private ArrayList<GenomeLocation> regions=new ArrayList<>();
+    private final int cycleIter;
+    private final ArrayList<Long> bpPartition=new ArrayList<>();
+    private final LongAccumulator totalVariantsNum;
+    public ParseCombineAndGenotypeGVCFs(GenomeLongRegion region, ArrayList<GenomeLocation> regions, String[] args, String outputBP, HashMap<String, String> confMap,
+                                        Broadcast<DriverBC> dBC, int cycleIter, ArrayList<Long> bpPartition,
+                                        LongAccumulator totalVariantsNum) {
         this.args=args;
         this.dBC=dBC.value();
         this.cycleIter=cycleIter;
@@ -76,37 +71,35 @@ public class ParseCombineAndGenotypeGVCFs implements Function2<Integer,Iterator<
         this.region=region;
         this.regions=regions;
         bpFile=outputBP;
-        for(Long ele:bpPartition){
-            this.bpPartition.add(ele);
-        }
+        this.totalVariantsNum=totalVariantsNum;
+        this.bpPartition.addAll(bpPartition);
     }
-    public class VcComp implements Comparator<VariantContext>,Serializable{
+    class VcComp implements Comparator<VariantContext>,Serializable{
 
         @Override public int compare(VariantContext o1, VariantContext o2) {
             return o1.getStart()-o2.getStart();
         }
     }
-    Comparator<VariantContext> comparator4 = new VcComp();
+    private final Comparator<VariantContext> comparator4 = new VcComp();
     String HEADER_DEFAULT_PATH = "vcfheader";
-    String MERGER_HEADER_INFO = "vcfheaderinfo";
+    private final String MERGER_HEADER_INFO = "vcfheaderinfo";
     @Override public Iterator<String> call(Integer index,Iterator<String> stringIterator) throws IOException {
         Logger log= LoggerFactory.getLogger(ParseCombineAndGenotypeGVCFs.class);
-        ArrayList<String> outValue=new ArrayList<>();
         Configuration hadoop_conf=new Configuration();
         for(String k:confMap.keySet()){
             hadoop_conf.set(k,confMap.get(k));
         }
-        ArrayList<String> mapGvcfList=new ArrayList<String>();
+//        ArrayList<String> mapGvcfList=new ArrayList<String>();
 
-        while(stringIterator.hasNext()) {
-            String gvcfPath = stringIterator.next();
-            mapGvcfList.add(gvcfPath);
-        }
+//        while(stringIterator.hasNext()) {
+//            String gvcfPath = stringIterator.next();
+//            mapGvcfList.add(gvcfPath);
+//        }
         contigs = new HashMap<>();
 //        SeekableStream in=new SeekableFileStream(new File(confMap.get(GaeaVCFOutputFormat.OUT_PATH_PROP)));
 //		SeekableStream in=new SeekableFileStream(new File(options.getOutDir()()+"/virtual.vcf"));
         System.out.println(formatter.format(new Date())+"\tbefore readHeader");
-        Path path = new Path(confMap.get(GaeaVCFOutputFormat.OUT_PATH_PROP));
+//        Path path = new Path(confMap.get(GaeaVCFOutputFormat.OUT_PATH_PROP));
         SeekableStream in = new SeekableFileStream(new File(dBC.outputDir+"/vcfheader"));
         header = VCFHeaderReader.readHeaderFrom(in);
         System.out.println(formatter.format(new Date())+"\tafter readHeader");
@@ -116,7 +109,7 @@ public class ParseCombineAndGenotypeGVCFs implements Function2<Integer,Iterator<
 
         for (VCFContigHeaderLine line : header.getContigLines()) {
             contigs.put(line.getContigIndex(), line.getID());
-            chrIndexs.put(line.getID(),line.getContigIndex());
+//            chrIndexs.put(line.getID(),line.getContigIndex());
         }
         parser = new GenomeLocationParser(header.getSequenceDictionary());
         hadoop_conf.set(GaeaVCFOutputFormat.OUT_PATH_PROP, dBC.options.getOutDir() + "/vcfheader");
@@ -135,11 +128,7 @@ public class ParseCombineAndGenotypeGVCFs implements Function2<Integer,Iterator<
         String sampleStr = confMap.get(dBC.INPUT_ORDER);
         String[] allSample=sampleStr.split(",");
 //        int mapperLine=allSample.length/options.getMapperNumber()<2?2:allSample.length/options.getMapperNumber();
-        int mapperLine=10;
-        ArrayList<String> ele=new ArrayList<String>();
-
-
-
+//        int mapperLine=10;
 
 
         System.out.println(formatter.format(new Date())+"\tbefore engine init");
@@ -156,15 +145,18 @@ public class ParseCombineAndGenotypeGVCFs implements Function2<Integer,Iterator<
         header2=engine.getVCFHeader();
         if(header2 == null)
             throw new RuntimeException("header is null !!!");
-        Path pBPpath=new Path(bpFile);
+//        Path pBPpath=new Path(bpFile);
         BufferedReader bp_reader=new BufferedReader(new FileReader(bpFile));
         winLine=bp_reader.readLine();
         System.out.println("reduce setup done");
 
         System.out.println(formatter.format(new Date())+"\treduce start");
-        ArrayList<BufferedReader> samplesReader=new ArrayList<>();
+//        ArrayList<BufferedReader> samplesReader=new ArrayList<>();
+        ArrayList<BlockCompressedInputStream> samplesReader=new ArrayList<>();
         ArrayList<VCFCodec> samplesCodec=new ArrayList<>();
         ArrayList<Integer> samplesTag=new ArrayList<>();
+//        ArrayList<Long> startOffset=new ArrayList<>();
+        ArrayList<Long> endOffset=new ArrayList<>();
         for(ArrayList<String> samplesInMap:dBC.multiMapSampleNames){
             //打开文件句柄
             Integer mapSMtagInt=0;
@@ -178,7 +170,7 @@ public class ParseCombineAndGenotypeGVCFs implements Function2<Integer,Iterator<
             mapSMtagInt+=headers.getHeaderSize();
             samplesTag.add(mapSMtagInt);
 //            String targetFileName=dBC.options.getOutDir()+"/combine."+cycleIter+"/combineFile."+mapSMtagInt+"."+index;
-            String targetFileName=dBC.options.getOutDir()+"/combine."+cycleIter+"/combineFile."+mapSMtagInt+"."+index;
+            String targetFileName=dBC.options.getOutDir()+"/combine."+cycleIter+"/combineFile."+mapSMtagInt;
             System.out.println("processed file:\t"+targetFileName);
 //            Path filePath=new Path(targetFileName);
 //            FileSystem fileFs=filePath.getFileSystem(hadoop_conf);
@@ -188,7 +180,22 @@ public class ParseCombineAndGenotypeGVCFs implements Function2<Integer,Iterator<
 //            }
 
 //            BufferedReader reader=new BufferedReader(new InputStreamReader(fileFs.open(filePath)));
-            BufferedReader reader=new BufferedReader(new FileReader(targetFileName));
+//            BufferedReader reader=new BufferedReader(new FileReader(targetFileName));
+            BlockCompressedInputStream reader=new BlockCompressedInputStream(new File(targetFileName));
+            BufferedReader idxReader=new BufferedReader(new FileReader(targetFileName+".idx"));
+            String idxLine;
+            while((idxLine=idxReader.readLine())!=null){
+                String[] eles=idxLine.split("\t");
+                int idx=Integer.parseInt(eles[0]);
+                if(idx==index) {
+                    reader.seek(Long.parseLong(eles[1]));
+                    endOffset.add(Long.parseLong(eles[2]));
+                    break;
+                }
+            }
+            idxReader.close();
+
+
             VCFHeader curSamplesMergedHeader=new VCFHeader(dBC.virtualHeader.getMetaDataInInputOrder(),samplesInMap);
             VCFCodec codec=new VCFCodec();
             codec.setVCFHeader(curSamplesMergedHeader,dBC.version);
@@ -200,20 +207,20 @@ public class ParseCombineAndGenotypeGVCFs implements Function2<Integer,Iterator<
             System.exit(1);
         }
         int vcNum=0;
-        String outFile=dBC.options.getOutDir()+"/genotype."+cycleIter+"/"+region.getStart()+"_"+region.getEnd()+"."+index;
+        String outFile=dBC.options.getOutDir()+"/genotype."+cycleIter+"/"+region.getStart()+"_"+region.getEnd()+"."+index+".gz";
         Path outPath=new Path(outFile);
         FileSystem outFs=outPath.getFileSystem(hadoop_conf);
         if(outFs.exists(outPath)){
             outFs.delete(outPath,true);
         }
-        BufferedWriter out=new BufferedWriter(new FileWriter(outFile));
+        BlockCompressedOutputStream out=new BlockCompressedOutputStream(outFile);
         long rangeInEachOutFile=(region.getEnd()-region.getStart())/dBC.options.getReducerNumber();
         log.info("range in each out file:\t"+rangeInEachOutFile);
         log.info("current index:\t"+index);
-        int minRange=100000;
-        if(rangeInEachOutFile<minRange){
-            rangeInEachOutFile=minRange;
-        }
+//        int minRange=100000;
+//        if(rangeInEachOutFile<minRange){
+//            rangeInEachOutFile=minRange;
+//        }
         boolean[] readerDone=new boolean[dBC.multiMapSampleNames.size()];
         for(int i=0;i<dBC.multiMapSampleNames.size();i++){
             readerDone[i]=false;
@@ -236,23 +243,47 @@ public class ParseCombineAndGenotypeGVCFs implements Function2<Integer,Iterator<
                     }
                 }
             }
-            ArrayList<VariantContext> dbsnps = null;
-            long startPosition = dbsnpShare.getStartPosition(chr, start / dBC.options.getWindowsSize(), dBC.options.getWindowsSize());
-            if (startPosition >= 0) dbsnps = filter.loadFilter(loader, chr, startPosition, end);
-            engine.init(dbsnps);
+            ArrayList<VariantContext> dbsnps = new ArrayList<>();
+//            int realStart=0;
+//            if(index==0){
+//                realStart=start;
+//            }else if(index>0){
+//                realStart= (int) (bpPartition.get(index-1)+1-dBC.accumulateLength.get(chrInx));
+//            }
+//
+//            int dbSnpRegionEnd=(int) (bpPartition.get(index)-dBC.accumulateLength.get(chrInx));
+//
+//            if(dbSnpRegionEnd>end){
+//                dbSnpRegionEnd= end;
+//            }
+//            long startPosition = dbsnpShare.getStartPosition(chr,realStart / dBC.options.getWindowsSize(),dbSnpRegionEnd/dBC.options.getWindowsSize(),dBC.options.getWindowsSize());
+//            if (startPosition >= 0) dbsnps = filter.loadFilter(loader, chr, startPosition, dbSnpRegionEnd);
+//            engine.init(dbsnps);
 
-
-
+//            if(dbsnps.size()>0) {
+//                System.out.println(dbsnps.get(0));
+//                System.out.println(dbsnps.get(dbsnps.size() - 1));
+//            }
             //为了避免每次从头读取winBp，保留bp_reader，使其只读一遍
             System.out.println(formatter.format(new Date()) + "\tbp window before get bps:\t" + winLine);
             LinkedList<VariantContext> regionVcs=new LinkedList<>();
 //            long smallWinStartLong=dBC.accumulateLength.get(chrInx)+start+rangeInEachOutFile*index;
             long smallWinStartLong=regionStart;
             long smallWinEndLong=smallWinStartLong+dBC.options.getWindowsSize()-1;
+            if(smallWinEndLong>regionEnd){
+                smallWinEndLong=regionEnd;
+            }
             int smallWinStart=start;
             int smallWinEnd=smallWinStart+dBC.options.getWindowsSize()-1;
+            if(smallWinEnd>contigLength){
+                smallWinEnd=contigLength;
+            }
+            if(smallWinEndLong-smallWinStartLong>contigLength || smallWinEnd-smallWinStart>contigLength){
+                log.error("code error");
+                System.exit(1);
+            }
             HashMap<Integer,ArrayList<VariantContext>> lastVCs=new HashMap<>();
-            ArrayList<BufferedWriter> outWriterList=new ArrayList<>();
+//            ArrayList<BufferedWriter> outWriterList=new ArrayList<>();
             int logIter=0;
             while(smallWinStartLong<=regionEnd){
                 //一个个小窗口开始处理
@@ -264,23 +295,28 @@ public class ParseCombineAndGenotypeGVCFs implements Function2<Integer,Iterator<
                     if(smallWinEndLong<bpPartition.get(index-1)) {
                         smallWinStartLong=smallWinEndLong+1;
                         smallWinEndLong=smallWinStartLong+dBC.options.getWindowsSize()-1;
+                        if(smallWinEndLong>regionEnd){
+                            smallWinEndLong=regionEnd;
+                        }
                         smallWinStart=smallWinEnd+1;
                         smallWinEnd=smallWinStart+dBC.options.getWindowsSize()-1;
+                        if(smallWinEnd>contigLength){
+                            smallWinEnd=contigLength;
+                        }
+                        if(smallWinEndLong-smallWinStartLong>contigLength || smallWinEnd-smallWinStart>contigLength){
+                            log.error("code error");
+                            System.exit(1);
+                        }
                         continue;
                     }
                 }
-//                int part1= (int) ((smallWinStartLong-region.getStart())/rangeInEachOutFile);
-//                int part2= (int) ((smallWinEndLong-region.getStart())/rangeInEachOutFile);
-//                if(part2<index){
-//                    smallWinStartLong=smallWinEndLong+1;
-//                    smallWinEndLong=smallWinStartLong+dBC.options.getWindowsSize()-1;
-//                    smallWinStart=smallWinEnd+1;
-//                    smallWinEnd=smallWinStart+dBC.options.getWindowsSize()-1;
-//                    continue;
-//                }else if(part1>index){
-//                    break;
-//                }
-
+                if(smallWinStartLong>smallWinEndLong){
+                    break;
+                }
+                long startPosition = dbsnpShare.getStartPosition(chr,smallWinStart / dBC.options.getWindowsSize(),smallWinEnd/dBC.options.getWindowsSize(),dBC.options.getWindowsSize());
+                if (startPosition >= 0) dbsnps = filter.loadFilter(loader, chr, startPosition, smallWinEnd);
+                engine.init(dbsnps);
+                System.out.println("dbsnp size:\t"+dbsnps.size());
                 Set<Integer> bps=new TreeSet<>();
                 for(int i=0;i<dBC.multiMapSampleNames.size();i++){
                     if(readerDone[i]){
@@ -312,6 +348,9 @@ public class ParseCombineAndGenotypeGVCFs implements Function2<Integer,Iterator<
                     String line = null;
                     while(true){
                         try {
+                            if(samplesReader.get(i).getFilePointer()>endOffset.get(i)){
+                                break;
+                            }
                             line=samplesReader.get(i).readLine();
                             if(line==null){
                                 readerDone[i]=true;
@@ -364,11 +403,11 @@ public class ParseCombineAndGenotypeGVCFs implements Function2<Integer,Iterator<
                         }
                     }
                 }
-                Collections.sort(regionVcs, comparator4);
-                if(logIter%5==0) {
+                regionVcs.sort(comparator4);
+//                if(logIter%5==0) {
                     System.out.println(formatter.format(new Date()) + "\tcurrent reduce key:\t" + chr + "\t" + chrInx + "\t" + smallWinStartLong + "\t" + smallWinEndLong);
                     System.out.println(formatter.format(new Date()) + "\tbps size in region:\t" + bps.size());
-                }
+//                }
                 logIter++;
                 for(int iter:bps){
                     VariantContext variantContext = engine.variantCallingForSpark(regionVcs.iterator(),
@@ -377,12 +416,13 @@ public class ParseCombineAndGenotypeGVCFs implements Function2<Integer,Iterator<
                         continue;
                     }
                     CommonInfo info = variantContext.getCommonInfo();
-                    HashMap<String, Object> maps = new HashMap<>();
-                    maps.putAll(info.getAttributes());
+                    HashMap<String, Object> maps = new HashMap<>(info.getAttributes());
                     maps.remove("SM");
                     info.setAttributes(maps);
-                    String value=vcfEncoder.encode(variantContext);
-                    out.write(value+"\n");
+                    String value=vcfEncoder.encode(variantContext)+"\n";
+                    out.write(value.getBytes());
+                    maps.clear();
+                    totalVariantsNum.add(1);
                     vcNum++;
                     while(regionVcs.size()>0){
                         VariantContext firstVc=regionVcs.getFirst();
@@ -395,10 +435,23 @@ public class ParseCombineAndGenotypeGVCFs implements Function2<Integer,Iterator<
                 }
                 smallWinStartLong=smallWinEndLong+1;
                 smallWinEndLong=smallWinStartLong+dBC.options.getWindowsSize()-1;
+                if(smallWinEndLong>regionEnd){
+                    smallWinEndLong=regionEnd;
+                }
                 smallWinStart=smallWinEnd+1;
                 smallWinEnd=smallWinStart+dBC.options.getWindowsSize()-1;
+                if(smallWinEnd>contigLength){
+                    smallWinEnd=contigLength;
+                }
+                if(smallWinEndLong-smallWinStartLong>contigLength || smallWinEnd-smallWinStart>contigLength){
+                    log.error("code error");
+                    System.exit(1);
+                }
                 regionVcs.clear();
+                bps.clear();
             }
+            if(dbsnps!=null)
+                dbsnps.clear();
         }
         out.close();
         ArrayList<String> totalNum=new ArrayList<>();

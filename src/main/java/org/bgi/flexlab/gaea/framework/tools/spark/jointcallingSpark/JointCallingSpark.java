@@ -2,59 +2,37 @@ package org.bgi.flexlab.gaea.framework.tools.spark.jointcallingSpark;
 
 import htsjdk.samtools.seekablestream.SeekableFileStream;
 import htsjdk.samtools.seekablestream.SeekableStream;
-import htsjdk.samtools.util.Locus;
-import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.*;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.*;
-import org.apache.hadoop.hdfs.util.ByteArray;
-import org.apache.spark.Accumulator;
-import org.apache.spark.Partition;
 import org.apache.spark.SparkConf;
-import org.apache.spark.TaskContext;
 import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
-import org.apache.spark.api.java.function.*;
 import org.apache.spark.broadcast.Broadcast;
-import org.apache.spark.serializer.JavaSerializer;
-import org.apache.spark.serializer.Serializer;
+import org.apache.spark.util.LongAccumulator;
 import org.bgi.flexlab.gaea.data.mapreduce.output.vcf.GaeaVCFOutputFormat;
-import org.bgi.flexlab.gaea.data.mapreduce.writable.WindowsBasedWritable;
 import org.bgi.flexlab.gaea.data.structure.location.GenomeLocation;
 import org.bgi.flexlab.gaea.data.structure.vcf.VCFLocalLoader;
 import org.bgi.flexlab.gaea.data.structure.vcf.VCFLocalWriter;
-import org.bgi.flexlab.gaea.tools.annotator.interval.Genome;
-import org.bgi.flexlab.gaea.tools.jointcalling.util.MultipleVCFHeaderForJointCalling;
-import org.bgi.flexlab.gaea.tools.mapreduce.jointcallingprepare.WindowsBasedTestPartitioner;
 import org.bgi.flexlab.gaea.util.Utils;
-import org.jcodings.util.Hash;
-import org.seqdoop.hadoop_bam.VariantContextWithHeader;
-import org.seqdoop.hadoop_bam.VariantContextWritable;
 import org.seqdoop.hadoop_bam.util.VCFHeaderReader;
-import org.seqdoop.hadoop_bam.util.WrapSeekable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import scala.Array;
-import scala.Tuple2;
 
 import java.io.*;
-import java.net.URI;
-import java.rmi.Remote;
 import java.util.*;
-import java.util.zip.GZIPInputStream;
 
-import static org.apache.spark.api.java.StorageLevels.MEMORY_ONLY;
-
+@SuppressWarnings({"ALL",
+        "ResultOfMethodCallIgnored"})
 public class JointCallingSpark {
-    public final static String INPUT_ORDER = "input.name.order";
-    public final static String INPUT_LIST = "input.gvcf.list";// added by gc
-    public final static String Window_File = "window.file.path";// window file path
-    public static Logger logger = LoggerFactory.getLogger(JointCallingSpark.class);
-    public static LinkedHashMap<String, Integer> chrIndex=new LinkedHashMap<>();
+    private final static String INPUT_ORDER = "input.name.order";
+    private final static String INPUT_LIST = "input.gvcf.list";// added by gc
+    private final static String Window_File = "window.file.path";// window file path
+    private static final Logger logger = LoggerFactory.getLogger(JointCallingSpark.class);
+    private static final LinkedHashMap<String, Integer> chrIndex=new LinkedHashMap<>();
 //    public static ArrayList<BufferedReader> sampleReaders=new ArrayList<>();
 //    public static ArrayList<BufferedReader> sampleReadersForMR2=new ArrayList<>();//HashMap可以深拷贝，不担心互相受影响
-    public static GenomeLocation parseRegionFromString(String targetRegion) {
+    private static GenomeLocation parseRegionFromString(String targetRegion) {
 //        GenomeLocation gloc;
         String ele="";
         ArrayList<String> eles=new ArrayList<>();
@@ -93,11 +71,11 @@ public class JointCallingSpark {
         logger.error("fail to parse targetRegion, please check the options");
         return null;
     }
-    public static void main(String[] args) throws IOException, ClassNotFoundException {
+    public static void main(String[] args) throws IOException {
         String HEADER_DEFAULT_PATH = "vcfheader";
         String MERGER_HEADER_INFO = "vcfheaderinfo";
         ArrayList<ArrayList<String>> multiMapSampleNames=new ArrayList<>();
-        LinkedHashMap<String,VCFFileReader> sampleReader=new LinkedHashMap<>();
+//        LinkedHashMap<String,VCFFileReader> sampleReader=new LinkedHashMap<>();
 
         JointCallingSparkOptions options = new JointCallingSparkOptions();
 
@@ -118,7 +96,7 @@ public class JointCallingSpark {
         Configuration hadoopConf=null;
         hadoopConf=sc.hadoopConfiguration();
         options.parse(args);//获得header等信息
-        String outputDir=options.getOutDir();
+//        String outputDir=options.getOutDir();
         //生成虚拟vcf header
         File tmpDir=new File(options.getOutDir());
         if(!tmpDir.exists()){
@@ -127,7 +105,7 @@ public class JointCallingSpark {
 
 
         Configuration hadoop_conf=new Configuration(hadoopConf);
-        MultipleVCFHeaderForJointCalling multiVcfHeader = new MultipleVCFHeaderForJointCalling();
+//        MultipleVCFHeaderForJointCalling multiVcfHeader = new MultipleVCFHeaderForJointCalling();
         logger.warn("before get Header");
 //        ArrayList<Path> pathList=new ArrayList<>();
         VCFHeader mergeHeader=null;
@@ -135,18 +113,19 @@ public class JointCallingSpark {
 //            pathList.add(new Path(a));
 //        }
         File headerDir=new File(options.getOutDir()+"/headers");
-        if(!headerDir.exists()){
-            headerDir.mkdirs();
-        }else{
-            if(!headerDir.isDirectory()){
-                headerDir.delete();
-                headerDir.mkdirs();
-            }
-        }
+
 
         File vcfheaderFile=new File(options.getOutDir()+"/vcfheader");
         File vcfheaderInfoFile=new File(options.getOutDir()+"/vcfheaderinfo");
         if(!vcfheaderFile.exists() || !vcfheaderInfoFile.exists() || !headerDir.exists()) {
+            if(!headerDir.exists()){
+                headerDir.mkdirs();
+            }else{
+                if(!headerDir.isDirectory()){
+                    headerDir.delete();
+                    headerDir.mkdirs();
+                }
+            }
             JavaRDD<String> gvcfSamples = sc.textFile(options.getInputList(), options.getMapperNumber());
             gvcfSamples.mapPartitionsWithIndex(new ProcessHeader(options), true).collect();
         }
@@ -295,9 +274,9 @@ public class JointCallingSpark {
 //        FileSystem vhiFs = vcfHeaderInfo.getFileSystem(hadoop_conf);
 //        BufferedReader indexReader = new BufferedReader()(new InputStreamReader(vhiFs.open(vcfHeaderInfo)));
 
-        int bufReaderSize=1024;
+//        int bufReaderSize=1024;
         //当样本量大时，这个bufferReader就容易造成OOM错误
-        long startMem = Runtime.getRuntime().freeMemory();
+//        long startMem = Runtime.getRuntime().freeMemory();
         BufferedReader gvcfList=new BufferedReader(new FileReader(fileList));
         String tmpLine;
         while ((tmpLine = gvcfList.readLine()) != null) {
@@ -366,6 +345,7 @@ public class JointCallingSpark {
             totalLength+=chrLength;
             accumulateLength.put(ii,totalLength-chrLength);
         }
+        accumulateLength.put(chrIndex.size(),totalLength);
         SeekableStream in2=new SeekableFileStream(new File(options.getOutDir()+"/virtual.vcf"));
         VCFHeader virtualHeader = VCFHeaderReader.readHeaderFrom(in2);
         Set<VCFHeaderLine> gvcfHeaderMetaInfo=virtualHeader.getMetaDataInInputOrder();
@@ -378,7 +358,7 @@ public class JointCallingSpark {
         }
 
         Broadcast<DriverBC> dBC=sc.broadcast(new DriverBC(options.getOutDir(),multiMapSampleNames,chrIndex,options, vVcfPath, sampleIndex, pathSample,accumulateLength,virtualHeader,version));
-        Long step=50000000L-1;
+        Long step=options.getRegionSize()-1;
         Long longStart=1L;
         Long longEnd=longStart+step;
         GenomeLongRegion region=new GenomeLongRegion(longStart,longEnd);
@@ -395,7 +375,7 @@ public class JointCallingSpark {
                 cycleEnd=accumulateLength.get(chrIndex.get(targetRegion.getContig()))+targetRegion.getEnd();
             }
         }
-
+        final LongAccumulator totalVariantsNum=sc.sc().longAccumulator("Variants num");
         while(true){
             //结束条件1：基因组区域处理结束
             if(region.getStart()>cycleEnd){
@@ -404,7 +384,7 @@ public class JointCallingSpark {
             ArrayList<GenomeLocation> regions=new ArrayList<>();
             long startLoc=0;
             long endLoc=0;
-            ArrayList<Integer> spanChrs=new ArrayList<>();
+//            ArrayList<Integer> spanChrs=new ArrayList<>();
             int startChr=-1;
             int endChr=-1;
             for(int ii=0;ii<accumulateLength.size();ii++){
@@ -421,6 +401,10 @@ public class JointCallingSpark {
                         break;
                     }
                 }
+            }
+            if(region.getEnd()>=accumulateLength.get(accumulateLength.size()-1)){
+                endChr=chrIndex.size()-1;
+                endLoc=header.getSequenceDictionary().getSequence(endChr).getSequenceLength();
             }
             if(endChr==startChr){
                 regions.add(new GenomeLocation(contigs.get(startChr),(int)startLoc,(int)endLoc));
@@ -440,6 +424,11 @@ public class JointCallingSpark {
 
             //partition必须依赖PairRDD，所以下面必须转换成PairRDD
             //提取变异位置
+            logger.info("region:\t"+region);
+            logger.info("region size:\t"+regions.size());
+            for(GenomeLocation curRegion:regions){
+                logger.info(curRegion.toString());
+            }
             JavaPairRDD<GenomeLongRegion,Integer> variantsRegion = sortedGvcfSamples.flatMapToPair(new ProcessVariantLocus(region,regions,dBC));
             //分区
             String outputBP=options.getOutDir()+"/bps."+String.valueOf(iter);
@@ -483,19 +472,18 @@ public class JointCallingSpark {
                     }
                 }
             }
-            Path pBPpath=new Path(mergedAllBPs);
+//            Path pBPpath=new Path(mergedAllBPs);
             BufferedReader bp_reader=new BufferedReader(new FileReader(mergedAllBPs));
             int bpIter=0;
             String bpRegion=bp_reader.readLine();
             bpIter++;
-            ArrayList<Long> bpDis=new ArrayList<>();
             if(bpRegion==null){
                 bpIter++;
                 region.setStart(region.getEnd()+1);
                 region.setEnd(region.getStart()+step);
                 continue;
             }else{
-                while((bpRegion=bp_reader.readLine())!=null){
+                while(bp_reader.readLine() !=null){
                     bpIter++;
                 }
             }
@@ -538,34 +526,49 @@ public class JointCallingSpark {
 //                    combineFs.delete(combineOutPath);
 //                }
 //            }
-            File combineOutLocalFile=new File(combineOutLocal);
-            if(!combineOutLocalFile.exists()){
-                combineOutLocalFile.mkdirs();
-                sortedGvcfSamples.foreachPartition(new CombineVariants(region,regions,mergedAllBPs,confMap,dBC,iter,bpPartition));
-            }else{
-                if(!combineOutLocalFile.isDirectory()){
-                    combineOutLocalFile.delete();
-                    combineOutLocalFile.mkdirs();
-                    sortedGvcfSamples.foreachPartition(new CombineVariants(region,regions,mergedAllBPs,confMap,dBC,iter,bpPartition));
-                }
-            }
-
-//            JavaPairRDD<Integer, Integer> combinedVariants= sortedGvcfSamples.mapPartitionsToPair(new ExtractVariants(region,mergedAllBPs,confMap,dBC,iter));
-            //这一步涉及到大量数据的网络传输，是限速步骤之一
-//            String genotypeOut=options.getOutDir()+"/genotype."+String.valueOf(iter);
             String genotypeOut=options.getOutDir()+"/genotype."+String.valueOf(iter);
             //生成潜在变异区间文件
             File genotypeOutPath=new File(genotypeOut);
+            boolean doGenotype=true;
             if(!genotypeOutPath.exists()){
                 genotypeOutPath.mkdirs();
             }else{
                 if(!genotypeOutPath.isDirectory()){
                     genotypeOutPath.delete();
+                }else{
+                    doGenotype=false;
                 }
             }
-            JavaRDD<String> noneGvcfSamples=sortedGvcfSamples.repartition(options.getReducerNumber());
-            JavaRDD<String> variantsNum=noneGvcfSamples.mapPartitionsWithIndex(new ParseCombineAndGenotypeGVCFs(region,regions,args,mergedAllBPs,confMap,dBC,iter,bpPartition),true);
-            variantsNum.collect();
+
+            File combineOutLocalFile=new File(combineOutLocal);
+            if(!combineOutLocalFile.exists()){
+                combineOutLocalFile.mkdirs();
+                if(doGenotype) {
+                    sortedGvcfSamples.foreachPartition(new CombineVariants(region, regions, mergedAllBPs, confMap, dBC, iter, bpPartition));
+                }
+            }else{
+                if(!combineOutLocalFile.isDirectory()){
+                    combineOutLocalFile.delete();
+                    combineOutLocalFile.mkdirs();
+                    if(doGenotype) {
+                        sortedGvcfSamples.foreachPartition(new CombineVariants(region, regions, mergedAllBPs, confMap, dBC, iter, bpPartition));
+                    }
+                }
+            }
+//            JavaPairRDD<Integer, Integer> combinedVariants= sortedGvcfSamples.mapPartitionsToPair(new ExtractVariants(region,mergedAllBPs,confMap,dBC,iter));
+            //这一步涉及到大量数据的网络传输，是限速步骤之一
+//            String genotypeOut=options.getOutDir()+"/genotype."+String.valueOf(iter);
+
+//            JavaRDD<String> sortedGvcfSamplesRepeat=sc.textFile(sortedInputGvcfList, options.getReducerNumber());
+            ArrayList<String> tmpStr=new ArrayList<>();
+            for(int i=0;i<options.getReducerNumber()*3;i++){
+                tmpStr.add("abc"+String.valueOf(i));
+            }
+            JavaRDD<String> nonsenceRDD=sc.parallelize(tmpStr,options.getReducerNumber());
+            if(doGenotype) {
+                JavaRDD<String> variantsNum = nonsenceRDD.mapPartitionsWithIndex(new ParseCombineAndGenotypeGVCFs(region, regions, args, mergedAllBPs, confMap, dBC, iter, bpPartition,totalVariantsNum), true);
+                variantsNum.collect();
+            }
 //            JavaPairRDD<Integer, VariantContext> partitionedCombineVariants=combinedVariants.repartitionAndSortWithinPartitions(new GenomeLocPartitioner2(options.getReducerNumber(),region));
 //            JavaRDD<String> genotypedVariants=partitionedCombineVariants.values().mapPartitions(new GenotypeVariants(region,args,mergedAllBPs,confMap,dBC));
 //            JavaRDD<String> genotypedVariants=partitionedCombineVariants.values().mapPartitionsWithIndex(new GenotypeVariantsNoMerge(region,args,mergedAllBPs,confMap,dBC),true);
@@ -578,15 +581,15 @@ public class JointCallingSpark {
             iter++;
             region.setStart(region.getEnd()+1);
             region.setEnd(region.getStart()+step);
-            if(combineOutLocalFile.isDirectory()){
-                String[] eles=combineOutLocalFile.list();
-                for(String ele:eles){
-                    File eleFile=new File(combineOutLocalFile.getAbsolutePath()+"/"+ele);
-                    eleFile.delete();
-                }
-                combineOutLocalFile.delete();
-            }
-
+//            if(combineOutLocalFile.isDirectory()){
+//                String[] eles=combineOutLocalFile.list();
+//                for(String ele:eles){
+//                    File eleFile=new File(combineOutLocalFile.getAbsolutePath()+"/"+ele);
+//                    eleFile.delete();
+//                }
+//                combineOutLocalFile.delete();
+//            }
+            logger.info("current total variants:\t"+totalVariantsNum.value());
             //结束条件2：所有gvcf文件读到EOF
         }
 

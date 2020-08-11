@@ -162,10 +162,9 @@ public class GaeaVariantContextUtils {
 				final Allele myRef = vc.getReference();
 				if (ref == null || ref.length() < myRef.length())
 					ref = myRef;
-				else if (ref.length() == myRef.length() && !ref.equals(myRef))
-					throw new TribbleException(String.format(
-							"The provided variant file(s) have inconsistent references for the same position(s) at %s:%d, %s vs. %s",
-							vc.getContig(), vc.getStart(), ref, myRef));
+				else if (ref.length() == myRef.length() && !ref.equals(myRef)) {
+				    throw new TribbleException(String.format("The provided variant file(s) have inconsistent references for the same position(s) at %s:%d, %s vs. %s", vc.getContig(), vc.getStart(), ref, myRef));
+                }
 			}
 		}
 
